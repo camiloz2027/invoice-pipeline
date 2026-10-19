@@ -6,11 +6,12 @@ import logging
 import re
 from pathlib import Path
 
-import pymupdf
+import pypdfium2 as pdfium
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_DPI = 200
+PDF_POINTS_PER_INCH = 72
 
 
 class PdfConversionError(Exception):
@@ -33,11 +34,12 @@ def convert_pdf(pdf_path: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> lis
     pdf_path = Path(pdf_path)
     output_dir = Path(images_dir) / _folder_name(pdf_path)
 
+    if not pdf_path.is_file():
+        raise PdfConversionError(f"{pdf_path.name} does not exist")
+
     try:
-        with pymupdf.open(pdf_path) as document:
-            if document.needs_pass:
-                raise PdfConversionError(f"{pdf_path.name} is password protected")
-            if document.page_count == 0:
+        with pdfium.PdfDocument(pdf_path) as document:
+            if len(document) == 0:
                 raise PdfConversionError(f"{pdf_path.name} has no pages")
 
             output_dir.mkdir(parents=True, exist_ok=True)
@@ -46,12 +48,15 @@ def convert_pdf(pdf_path: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> lis
 
             image_paths = []
             for number, page in enumerate(document, start=1):
+                image = page.render(scale=dpi / PDF_POINTS_PER_INCH).to_pil()
                 image_path = output_dir / f"page_{number:03d}.png"
-                page.get_pixmap(dpi=dpi).save(image_path)
+                image.save(image_path, dpi=(dpi, dpi))
                 image_paths.append(image_path)
     except PdfConversionError:
         raise
-    except Exception as error:  # pymupdf raises several unrelated error types
+    except (pdfium.PdfiumError, OSError) as error:
+        # PdfiumError covers corrupt or password-protected files; OSError covers
+        # missing files and write failures.
         raise PdfConversionError(f"Could not convert {pdf_path.name}: {error}") from error
 
     logger.info("Converted %s: %d page(s) at %d dpi", pdf_path.name, len(image_paths), dpi)
@@ -61,9 +66,16 @@ def convert_pdf(pdf_path: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> lis
 def convert_all(raw_dir: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> dict[Path, list[Path]]:
     """Convert every PDF in ``raw_dir``; a failing PDF is logged and skipped.
 
+    A missing ``raw_dir`` is logged as a warning and converts nothing.
+
     Returns a mapping of each converted PDF to its image paths.
     """
-    pdfs = sorted(p for p in Path(raw_dir).iterdir() if p.suffix.lower() == ".pdf")
+    raw_dir = Path(raw_dir)
+    if not raw_dir.is_dir():
+        logger.warning("Input folder does not exist: %s", raw_dir)
+        return {}
+
+    pdfs = sorted(p for p in raw_dir.iterdir() if p.suffix.lower() == ".pdf")
     if not pdfs:
         logger.warning("No PDF files found in %s", raw_dir)
 

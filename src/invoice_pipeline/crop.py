@@ -50,11 +50,15 @@ def crop_all(images_dir: Path, crops_dir: Path, box: CropBox = CROP_BOX) -> dict
     ``images_dir/<invoice>/page_001.png`` becomes ``crops_dir/<invoice>/page_001.png``.
     Running it again overwrites the previous result: leftover crops from an
     earlier run are removed first. A page that fails is logged and skipped.
+    A missing ``images_dir`` is logged as a warning and crops nothing.
 
     Returns a mapping of each invoice folder to its cropped image paths.
     """
     _validate_box(box)
     images_dir, crops_dir = Path(images_dir), Path(crops_dir)
+    if not images_dir.is_dir():
+        logger.warning("Input folder does not exist: %s", images_dir)
+        return {}
 
     invoice_dirs = sorted(p for p in images_dir.iterdir() if p.is_dir())
     if not invoice_dirs:
