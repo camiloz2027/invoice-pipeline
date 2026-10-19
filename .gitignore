@@ -218,3 +218,18 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# macOS
+.DS_Store
+
+# --- invoice-pipeline ---
+# Local data (real invoices, images, database, logs): never committed
+data/
+# Safety net: no PDF/image is committed except in examples/ (fake invoices)
+*.pdf
+*.png
+*.jpg
+*.jpeg
+!examples/**/*.pdf
+!examples/**/*.png
+!docs/images/*.png
