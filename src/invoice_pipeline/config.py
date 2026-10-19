@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# src/invoice_pipeline/config.py -> project root is three levels up.
+# parents[0] = invoice_pipeline/, parents[1] = src/, parents[2] = the project root.
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
@@ -42,6 +42,10 @@ class Config:
         return self.data_dir / "interim" / "crops"
 
     @property
+    def grids_dir(self) -> Path:
+        return self.data_dir / "interim" / "grids"
+
+    @property
     def processed_dir(self) -> Path:
         return self.data_dir / "processed"
 
@@ -67,6 +71,7 @@ class Config:
             self.raw_dir,
             self.images_dir,
             self.crops_dir,
+            self.grids_dir,
             self.processed_dir,
             self.failed_dir,
             self.logs_dir,
