@@ -20,6 +20,12 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 The first version targets the invoice layout of a single vendor, so the crop region
 is fixed (`CROP_BOX` in [crop.py](src/invoice_pipeline/crop.py)).
 
+The invoice date is not read from the invoice. Each extraction result carries an
+`extracted_at` date, the day it was processed, which is set by the code and not by the AI.
+This assumes invoices are processed the same day they arrive. If the real invoice date is
+needed, the pipeline can be changed to send the full page image to the AI; do that according
+to the processing requirements and security standards that apply to your data.
+
 ## Requirements
 
 - Python 3.11+
