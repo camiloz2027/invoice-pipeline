@@ -5,7 +5,7 @@ Two layers:
 * ``PageExtraction`` is what the AI returns for ONE page image. Its JSON schema
   is sent to the API as the required output format, so the response always has
   this exact shape. The ``description`` of each field is part of that schema and
-  tells the model which column of the invoice to read.
+  tells the model what the field is.
 * ``InvoiceExtraction`` is the final JSON saved per invoice. The code adds what
   the AI must not decide: the invoice number, the extraction date and the page.
 """
@@ -21,7 +21,11 @@ class InvoiceLine(BaseModel):
     """One row of the item table, as read from the page image."""
 
     description: str = Field(
-        description="Text of the 'Description' column, on every line of the row."
+        description=(
+            "Text of the 'Description' column only, with its lines joined by a single space. "
+            "Never include the 'Brand' column, and do not complete text that is cut off at the "
+            "edge of the cell."
+        )
     )
     upc: str | None = Field(
         description=(
@@ -29,15 +33,53 @@ class InvoiceLine(BaseModel):
             "Do not use the 'Code' column. Null if the cell is empty."
         )
     )
-    qty_ordered: int = Field(description="'Qty Ord.' column.")
-    qty_shipped: int = Field(description="'Shipped' column.")
-    price: float = Field(description="'Price' column, before any discount.")
-    net_price: float = Field(description="'Net Price' column, the price after the discount.")
+    qty_ordered: int | None = Field(description="'Qty Ord.' column. Null if not visible.")
+    qty_shipped: int | None = Field(description="'Shipped' column. Null if not visible.")
+    price: float | None = Field(
+        description="'Price' column, before any discount. Null if not visible."
+    )
+    net_price: float | None = Field(
+        description="'Net Price' column, the price after the discount. Null if not visible."
+    )
     discount_pct: float | None = Field(
         description="'Disc %' column as a percentage (20 means 20%). Null if the cell is empty."
     )
-    unit_price: float = Field(description="'Unit Price' column, the price per single unit.")
-    total: float = Field(description="'Extended Price' column. A value written '.00' is 0.")
+    unit_price: float | None = Field(
+        description="'Unit Price' column, the price per single unit. Null if not visible."
+    )
+    total: float | None = Field(
+        description="'Extended Price' column. A value written '.00' is 0. Null if not visible."
+    )
+
+
+class UnfulfilledItem(BaseModel):
+    """One row of the 'Unfulfilled supply' list: a product that could not be shipped."""
+
+    upc: str = Field(description="First column of the row, as text so leading zeros are kept.")
+    description: str = Field(
+        description="The item description, joining its text columns with a single space."
+    )
+    quantity: int | None = Field(description="The 'Quantity' column. Null if not visible.")
+    reason: str | None = Field(
+        description="The 'Reason' column, copied exactly as printed. Null if not visible."
+    )
+
+
+class Charge(BaseModel):
+    """One line of the totals block between the subtotal and the total (fees, taxes)."""
+
+    name: str = Field(description="The label exactly as printed, for example 'GST 5.00 %'.")
+    amount: float
+
+
+class InvoiceTotals(BaseModel):
+    """The totals block at the end of the invoice."""
+
+    subtotal: float | None = Field(description="The amount next to 'SUBTOTAL'.")
+    total: float | None = Field(description="The amount next to 'TOTAL'.")
+    charges: list[Charge] = Field(
+        description="Every fee or tax line between the subtotal and the total, in order."
+    )
 
 
 class PageExtraction(BaseModel):
@@ -46,10 +88,28 @@ class PageExtraction(BaseModel):
     lines: list[InvoiceLine] = Field(
         description="Every row of the item table on the page, in order from top to bottom."
     )
+    continued_description: str | None = Field(
+        description=(
+            "Text at the very top of the page that continues the description of the previous "
+            "page's last row (a line with no quantities, UPC or prices). Null if there is none."
+        )
+    )
+    unfulfilled: list[UnfulfilledItem] = Field(
+        description="Rows of the 'Unfulfilled supply' list on this page. Empty if there are none."
+    )
+    totals: InvoiceTotals | None = Field(
+        description="The invoice totals block, only if this page shows it. Otherwise null."
+    )
 
 
 class ExtractedLine(InvoiceLine):
     """A line in the final JSON: the AI's fields plus the page, set by the code."""
+
+    page: int
+
+
+class ExtractedUnfulfilled(UnfulfilledItem):
+    """An unfulfilled item in the final JSON: the AI's fields plus the page."""
 
     page: int
 
@@ -62,3 +122,6 @@ class InvoiceExtraction(BaseModel):
     # The day the invoice was processed, not the date printed on the invoice.
     extracted_at: datetime.date
     lines: list[ExtractedLine]
+    unfulfilled: list[ExtractedUnfulfilled]
+    # None when no page showed a totals block.
+    totals: InvoiceTotals | None
