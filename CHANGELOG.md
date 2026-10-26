@@ -16,3 +16,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Code-side handling of what the AI must not decide: invoice number from the file name, extraction date (`extracted_at`), page numbers, joining descriptions that run over two pages, and reading again a page that continues the "Unfulfilled supply" list.
 - `anthropic` and `pydantic` dependencies.
 - Validation of the extracted data (`validate.py`): per-line arithmetic, line totals against the subtotal, subtotal plus fees against the total, and sanity checks on quantities and amounts. It reports every finding as an error, a warning or a note and never changes the data.
+- Validation accepts invoices that print only a total and no subtotal, with a note when that happens.
+
+### Fixed
+- Extraction joins a totals block that is split over two pages instead of keeping only the first half, which left the invoice without a total.
