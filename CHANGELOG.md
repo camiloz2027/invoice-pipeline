@@ -4,6 +4,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-26
+
 ### Added
 - Initial project skeleton.
 - Configuration module that reads `.env` and derives the `data/` paths.
@@ -20,3 +22,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 - Extraction joins a totals block that is split over two pages instead of keeping only the first half, which left the invoice without a total.
+
+[Unreleased]: https://github.com/camiloz2027/invoice-pipeline/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/camiloz2027/invoice-pipeline/releases/tag/v0.1.0
