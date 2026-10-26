@@ -12,7 +12,7 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 | 1 | PDF → one PNG per page | `pdf_to_images.py` | Done |
 | 2 | Crop each page to the region with the invoice data | `crop.py` | Done |
 | 3 | AI extraction (vision) | `extract.py` | Done |
-| 4 | Validation | `validate.py` | Planned |
+| 4 | Validation | `validate.py` | Done |
 | 5 | SQLite storage | `db.py` | Planned |
 | 6 | Price analytics and notebook | `analytics.py` | Planned |
 | 7 | CLI, demo, weekly run script, CI | `cli.py`, `demo.py` | Planned |
@@ -63,6 +63,7 @@ active):
 python src/invoice_pipeline/pdf_to_images.py   # data/raw -> data/interim/images
 python src/invoice_pipeline/crop.py            # data/interim/images -> data/interim/crops
 python src/invoice_pipeline/extract.py         # data/interim/crops -> data/interim/extracted
+python src/invoice_pipeline/validate.py        # checks data/interim/extracted, changes nothing
 ```
 
 Running a stage again overwrites its previous output, so you can tune and repeat it freely.
@@ -131,6 +132,40 @@ made-up values:
   reads again a page that continues the "Unfulfilled supply" list.
 - If any page of an invoice fails, no JSON is saved for that invoice.
 - In a test with a 10-page invoice it took about a minute and cost about one US cent.
+
+## Validation
+
+The AI can misread a digit and still return a well-formed JSON, so `validate.py` checks that
+the numbers agree with each other, using the arithmetic the invoice itself provides. It only
+reads the JSON files: it never changes them and makes no API calls. Money is compared as
+`Decimal`, allowing a difference of one cent.
+
+Every line is checked the same way, including lines that were not shipped, because all of
+them are kept. For the example above:
+
+| Rule | Severity | What it checks | Example |
+|------|----------|----------------|---------|
+| E1 | error | The totals block has a subtotal and a total | `totals` is present |
+| E2 | error | Each line has its shipped quantity; a line that shipped also has `net_price` and `total` | `qty_shipped` is not `null` |
+| E3 | error | Shipped quantity × net price = line total (a line that did not ship must total 0) | 1 × 32.0 = 32.0 |
+| E4 | error | The line totals add up to the printed subtotal | 32.0 = 32.0 |
+| E5 | error | Subtotal + fees and taxes = printed total | 32.0 + 1.6 = 33.6 |
+| E6 | error | No negative amounts, and never more shipped than ordered | 0 ≤ 1 ≤ 1 |
+| W1 | warning | A line without a UPC | `upc` is not empty |
+| W2 | warning | The same UPC on more than one line (a duplicated page, maybe) | each UPC appears once |
+| W3 | warning | A net price above the list price | 32.0 ≤ 40.0 |
+| I1 | info | Lines not shipped compared with the "Unfulfilled supply" list; shown only, never judged | 0 lines, 1 row |
+
+- An invoice **fails** when it has at least one error. Warnings and notes do not fail it.
+- All the findings are reported, not only the first one. A single misread value often breaks
+  more than one rule (a wrong subtotal breaks E4 and E5), and the combination points to the
+  cause. The E4 message includes the difference.
+- The unfulfilled list is shown but its detail is not checked: the priority is the data that
+  was billed.
+- Not checked: the description, the discount percentage (the invoice prints it rounded to a
+  whole number) and each fee or tax on its own.
+- For now a failed invoice is only reported in the log and in the returned report; nothing is
+  moved or corrected. What to do with it comes with the CLI.
 
 ## Development
 

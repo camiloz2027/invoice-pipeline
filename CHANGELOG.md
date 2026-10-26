@@ -15,3 +15,4 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Output schemas (Pydantic) for the AI reply and for the final JSON: item lines, the "Unfulfilled supply" list and the invoice totals.
 - Code-side handling of what the AI must not decide: invoice number from the file name, extraction date (`extracted_at`), page numbers, joining descriptions that run over two pages, and reading again a page that continues the "Unfulfilled supply" list.
 - `anthropic` and `pydantic` dependencies.
+- Validation of the extracted data (`validate.py`): per-line arithmetic, line totals against the subtotal, subtotal plus fees against the total, and sanity checks on quantities and amounts. It reports every finding as an error, a warning or a note and never changes the data.
