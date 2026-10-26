@@ -7,16 +7,18 @@ printed total. It only reads the data and never corrects it.
 
 Rules (``E`` = error, the invoice fails; ``W`` = warning; ``I`` = information):
 
-* E1 totals block present, with subtotal and total.
+* E1 totals block present, with the total (the subtotal is optional).
 * E2 every line has its shipped quantity; a line that shipped also has net price and total.
 * E3 shipped x net price = line total (a line that did not ship must total 0).
-* E4 the sum of the line totals = the printed subtotal.
-* E5 subtotal + fees and taxes = the printed total.
+* E4 the sum of the line totals = the printed subtotal (or, when the invoice prints no
+  subtotal, the printed total minus the fees and taxes).
+* E5 subtotal + fees and taxes = the printed total (only when a subtotal is printed).
 * E6 no negative amounts and never more shipped than ordered.
 * W1 a line without UPC.
 * W2 a UPC repeated across lines (a duplicated page, maybe).
 * W3 a net price above the list price.
 * I1 lines not shipped against the "Unfulfilled supply" list (shown only, never judged).
+* I2 the invoice prints no subtotal (shown only).
 
 The description, the discount percentage and each fee on its own are not checked.
 """
@@ -102,8 +104,8 @@ def validate_invoice(invoice: InvoiceExtraction) -> ValidationReport:
         report.issues.append(Issue(severity, rule, message, page, line))
 
     totals = invoice.totals
-    if totals is None or totals.subtotal is None or totals.total is None:
-        add(Severity.ERROR, "E1", "totals block, subtotal or total is missing")
+    if totals is None or totals.total is None:
+        add(Severity.ERROR, "E1", "totals block or total is missing")
 
     lines_sum = Decimal(0)
     for number, line in enumerate(invoice.lines, start=1):
@@ -155,8 +157,25 @@ def validate_invoice(invoice: InvoiceExtraction) -> ValidationReport:
         if count > 1:
             add(Severity.WARNING, "W2", f"UPC {upc} appears on {count} lines")
 
-    if totals is not None and totals.subtotal is not None:
-        subtotal = _money(totals.subtotal)
+    if totals is not None and totals.total is not None:
+        total = _money(totals.total)
+        fees = sum((_money(charge.amount) for charge in totals.charges), Decimal(0))
+        if totals.subtotal is not None:
+            subtotal = _money(totals.subtotal)
+            if _differ(subtotal + fees, total):
+                add(
+                    Severity.ERROR,
+                    "E5",
+                    f"subtotal {subtotal} + fees {fees} = {subtotal + fees}, total is {total}",
+                )
+        else:
+            # Short invoices print only the total, with no subtotal line.
+            subtotal = total - fees
+            add(
+                Severity.INFO,
+                "I2",
+                "no subtotal printed; the lines are compared with the total minus the fees",
+            )
         if _differ(lines_sum, subtotal):
             add(
                 Severity.ERROR,
@@ -164,15 +183,6 @@ def validate_invoice(invoice: InvoiceExtraction) -> ValidationReport:
                 f"lines add up to {lines_sum}, subtotal is {subtotal} "
                 f"(difference {lines_sum - subtotal})",
             )
-        if totals.total is not None:
-            fees = sum((_money(charge.amount) for charge in totals.charges), Decimal(0))
-            if _differ(subtotal + fees, _money(totals.total)):
-                add(
-                    Severity.ERROR,
-                    "E5",
-                    f"subtotal {subtotal} + fees {fees} = {subtotal + fees}, "
-                    f"total is {totals.total}",
-                )
 
     not_shipped = {line.upc for line in invoice.lines if line.qty_shipped == 0 and line.upc}
     listed = {item.upc for item in invoice.unfulfilled}
