@@ -131,6 +131,10 @@ made-up values:
   name), `extracted_at` and `page`. It also joins descriptions that run over two pages and
   reads again a page that continues the "Unfulfilled supply" list.
 - If any page of an invoice fails, no JSON is saved for that invoice.
+- The totals block can be split over two pages (the subtotal at the bottom of one, the fees and
+  the total at the top of the next). The code joins the blocks: each amount comes from the first
+  block that has it, and the fees are put together in order. If two blocks disagree on an
+  amount, the first is kept and a warning is logged.
 - In a test with a 10-page invoice it took about a minute and cost about one US cent.
 
 ## Validation
@@ -145,16 +149,17 @@ them are kept. For the example above:
 
 | Rule | Severity | What it checks | Example |
 |------|----------|----------------|---------|
-| E1 | error | The totals block has a subtotal and a total | `totals` is present |
+| E1 | error | The totals block has a total (the subtotal is optional: short invoices print only a total) | `total` is present |
 | E2 | error | Each line has its shipped quantity; a line that shipped also has `net_price` and `total` | `qty_shipped` is not `null` |
 | E3 | error | Shipped quantity × net price = line total (a line that did not ship must total 0) | 1 × 32.0 = 32.0 |
-| E4 | error | The line totals add up to the printed subtotal | 32.0 = 32.0 |
-| E5 | error | Subtotal + fees and taxes = printed total | 32.0 + 1.6 = 33.6 |
+| E4 | error | The line totals add up to the printed subtotal, or to the printed total minus the fees and taxes when the invoice prints no subtotal | 32.0 = 32.0 |
+| E5 | error | Subtotal + fees and taxes = printed total (only when a subtotal is printed) | 32.0 + 1.6 = 33.6 |
 | E6 | error | No negative amounts, and never more shipped than ordered | 0 ≤ 1 ≤ 1 |
 | W1 | warning | A line without a UPC | `upc` is not empty |
 | W2 | warning | The same UPC on more than one line (a duplicated page, maybe) | each UPC appears once |
 | W3 | warning | A net price above the list price | 32.0 ≤ 40.0 |
 | I1 | info | Lines not shipped compared with the "Unfulfilled supply" list; shown only, never judged | 0 lines, 1 row |
+| I2 | info | The invoice prints no subtotal; shown only | the example has one |
 
 - An invoice **fails** when it has at least one error. Warnings and notes do not fail it.
 - All the findings are reported, not only the first one. A single misread value often breaks
