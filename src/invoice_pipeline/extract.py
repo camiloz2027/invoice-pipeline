@@ -42,6 +42,11 @@ Every item row, from top to bottom. A row has quantities, a UPC and prices.
   description, and never complete text that is cut off at the edge of a cell:
   copy what is visible.
 - If a description wraps over several lines, join them with a single space.
+- Three quantity columns sit side by side: 'Qty Ord.' is the quantity ordered,
+  'Shipped' is the quantity shipped now, and 'B/O' ('A Venir', back order) is
+  the quantity ordered that was NOT shipped and will come later. They often
+  hold the same number. qty_shipped is ONLY the 'Shipped' column: a row with
+  Shipped 0 and B/O 1 has qty_shipped 0. Never copy B/O into qty_shipped.
 - Copy each value exactly as printed. Do not calculate, correct or guess.
   If a value is not visible, use null.
 
@@ -57,8 +62,18 @@ its title, so any row that starts with a UPC and ends with a date belongs
 here and never in lines. If the page has no such rows, return an empty list.
 
 4. totals
-Only if the page shows the invoice totals block (subtotal, fees, taxes and
-total). Otherwise use null.
+The invoice totals block is a few labelled amounts under the item table: an
+optional SUBTOTAL, fee or tax lines (for example DEPOSIT FEE, CONTAINER FEE,
+GST) and a "** TOTAL **" line. The block can be split over two pages, and a
+short invoice may print only the TOTAL line.
+- Return totals as soon as ANY of those labels is visible on this page, even
+  if it is the only one (a page with just the "** TOTAL **" line still
+  returns totals with that total). Use null for totals only if none is visible.
+- Fill only what this page shows. subtotal is the amount next to SUBTOTAL and
+  total is the amount next to "** TOTAL **"; if that label is not on this page,
+  use null. Never use a fee, a tax or the last amount shown as the total.
+- charges are the fee and tax lines on this page, in order, without SUBTOTAL
+  and TOTAL.
 
 Ignore everything else: column headers, footers and page numbers.
 """
