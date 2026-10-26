@@ -135,6 +135,38 @@ def _lines_to_unfulfilled(
     return items
 
 
+def _merge_totals(
+    first: InvoiceTotals, extra: InvoiceTotals, invoice_name: str, page_number: int
+) -> InvoiceTotals:
+    """Join two totals blocks read from different pages.
+
+    The totals block can be split over two pages (the subtotal at the bottom of
+    one, the fees and the total at the top of the next). Each amount is taken
+    from the first block that has it, and the fees are put together in order. If
+    both blocks have a value for the same amount and they differ, the first one
+    is kept and a warning is logged. A fee already read (same label and amount)
+    is not added twice.
+    """
+    merged: dict[str, float | None] = {}
+    for name in ("subtotal", "total"):
+        old, new = getattr(first, name), getattr(extra, name)
+        if old is not None and new is not None and old != new:
+            logger.warning(
+                "%s page %d: the %s differs from the one already read (%s vs %s); keeping the first",
+                invoice_name,
+                page_number,
+                name,
+                old,
+                new,
+            )
+        merged[name] = old if old is not None else new
+    charges = list(first.charges)
+    for charge in extra.charges:
+        if charge not in charges:
+            charges.append(charge)
+    return InvoiceTotals(charges=charges, **merged)
+
+
 def invoice_number_from_name(name: str) -> str | None:
     """Take the invoice number from a file or folder name ("Invoice_1234567" -> "1234567").
 
@@ -297,11 +329,12 @@ def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_di
             if totals is None:
                 totals = page.totals
             else:
-                logger.warning(
-                    "%s page %d shows a second totals block; keeping the first",
+                logger.info(
+                    "%s page %d shows more of the totals block; joining it with the first",
                     invoice_dir.name,
                     page_number,
                 )
+                totals = _merge_totals(totals, page.totals, invoice_dir.name, page_number)
         logger.info(
             "Extracted %s page %d: %d line(s), %d unfulfilled",
             invoice_dir.name,
