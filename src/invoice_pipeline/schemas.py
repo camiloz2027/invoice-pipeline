@@ -33,8 +33,16 @@ class InvoiceLine(BaseModel):
             "Do not use the 'Code' column. Null if the cell is empty."
         )
     )
-    qty_ordered: int | None = Field(description="'Qty Ord.' column. Null if not visible.")
-    qty_shipped: int | None = Field(description="'Shipped' column. Null if not visible.")
+    qty_ordered: int | None = Field(
+        description="'Qty Ord.' column, the quantity ordered. Null if not visible."
+    )
+    qty_shipped: int | None = Field(
+        description=(
+            "'Shipped' column only, the quantity shipped now. Never the 'B/O' (back order) "
+            "column next to it: a row with Shipped 0 and B/O 1 has qty_shipped 0. "
+            "Null if not visible."
+        )
+    )
     price: float | None = Field(
         description="'Price' column, before any discount. Null if not visible."
     )
@@ -73,12 +81,25 @@ class Charge(BaseModel):
 
 
 class InvoiceTotals(BaseModel):
-    """The totals block at the end of the invoice."""
+    """The totals block at the end of the invoice; a page can show only part of it."""
 
-    subtotal: float | None = Field(description="The amount next to 'SUBTOTAL'.")
-    total: float | None = Field(description="The amount next to 'TOTAL'.")
+    subtotal: float | None = Field(
+        description=(
+            "The amount next to the label 'SUBTOTAL'. Null if that label is not on this page "
+            "(some invoices have no subtotal)."
+        )
+    )
+    total: float | None = Field(
+        description=(
+            "The amount next to the label '** TOTAL **'. Null if that label is not on this "
+            "page. Never a fee, a tax or the last amount shown."
+        )
+    )
     charges: list[Charge] = Field(
-        description="Every fee or tax line between the subtotal and the total, in order."
+        description=(
+            "Every fee or tax line shown on this page, in order, without the subtotal and the "
+            "total. Empty if there are none."
+        )
     )
 
 
@@ -98,7 +119,11 @@ class PageExtraction(BaseModel):
         description="Rows of the 'Unfulfilled supply' list on this page. Empty if there are none."
     )
     totals: InvoiceTotals | None = Field(
-        description="The invoice totals block, only if this page shows it. Otherwise null."
+        description=(
+            "The invoice totals block as far as this page shows it. Not null as soon as any of "
+            "SUBTOTAL, a fee or tax line or '** TOTAL **' is visible, even if it is the only "
+            "one. Null only if none of them is on this page."
+        )
     )
 
 

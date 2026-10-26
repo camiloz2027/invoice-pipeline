@@ -132,7 +132,9 @@ made-up values:
   reads again a page that continues the "Unfulfilled supply" list.
 - If any page of an invoice fails, no JSON is saved for that invoice.
 - The totals block can be split over two pages (the subtotal at the bottom of one, the fees and
-  the total at the top of the next). The code joins the blocks: each amount comes from the first
+  the total at the top of the next), and a page can show only part of it, even just the
+  `** TOTAL **` line. The AI fills only what the page shows and leaves the rest `null`.
+  The code joins the blocks: each amount comes from the first
   block that has it, and the fees are put together in order. If two blocks disagree on an
   amount, the first is kept and a warning is logged.
 - In a test with a 10-page invoice it took about a minute and cost about one US cent.
