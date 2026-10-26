@@ -9,7 +9,13 @@ description = "Extracts data from PDF invoices with AI, validates it and analyze
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["python-dotenv>=1.0", "pypdfium2>=5.14", "pillow>=10.1"]
+dependencies = [
+    "python-dotenv>=1.0",
+    "pypdfium2>=5.14",
+    "pillow>=10.1",
+    "anthropic>=1.0",
+    "pydantic>=2.0",
+]
 
 [project.urls]
 Repository = "https://github.com/camiloz2027/invoice-pipeline"
