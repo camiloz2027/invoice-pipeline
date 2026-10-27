@@ -5,12 +5,17 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- Per-vendor settings (`vendors.py`): each vendor is a folder in `data/raw/` named like its entry, and holds its own crop region. A folder with no entry is logged and skipped, so a page is never cropped with another vendor's region.
+- Per-vendor settings: each vendor is a folder in `data/raw/` with a settings file `data/vendors/<vendor>.toml` that holds its crop regions (`body_box`, and `id_box` for the invoice number). A folder with no valid settings is logged and skipped, so a page is never cropped with another vendor's region.
+- `pick_boxes.py`: choose a vendor's crop regions by dragging on its pages in the browser and clicking a button. It runs a local-only server protected by a random token and writes the settings file.
 - Page orientation (`orientation.py`): scanned pages that arrive sideways or upside down are detected locally with Tesseract and turned upright before they are saved. A page whose orientation is unclear is logged and left as it is. Tesseract is now a system requirement, plus the `pytesseract` dependency.
 
 ### Changed
 - **Breaking:** PDFs must now live in `data/raw/<vendor>/`, and every stage reads and writes `data/interim/<stage>/<vendor>/`.
 - `crop.py` no longer has a default crop box; it must be given one.
+- `pdf_to_images.py` converts every vendor folder, even one with no settings yet, so its crop regions can be chosen on its pages.
+
+### Removed
+- `grid_overlay.py` and the `data/interim/grids/` folder: `pick_boxes.py` replaces them for choosing crop regions.
 
 ### Fixed
 - Extraction reads a totals block that a page shows only in part, such as a page with just the `** TOTAL **` line. Before, the AI returned no totals for those pages, and in one case copied a fee into the total.
