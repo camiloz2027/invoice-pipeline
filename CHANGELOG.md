@@ -4,6 +4,14 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- Per-vendor settings (`vendors.py`): each vendor is a folder in `data/raw/` named like its entry, and holds its own crop region. A folder with no entry is logged and skipped, so a page is never cropped with another vendor's region.
+- Page orientation (`orientation.py`): scanned pages that arrive sideways or upside down are detected locally with Tesseract and turned upright before they are saved. A page whose orientation is unclear is logged and left as it is. Tesseract is now a system requirement, plus the `pytesseract` dependency.
+
+### Changed
+- **Breaking:** PDFs must now live in `data/raw/<vendor>/`, and every stage reads and writes `data/interim/<stage>/<vendor>/`.
+- `crop.py` no longer has a default crop box; it must be given one.
+
 ### Fixed
 - Extraction reads a totals block that a page shows only in part, such as a page with just the `** TOTAL **` line. Before, the AI returned no totals for those pages, and in one case copied a fee into the total.
 - Extraction no longer reads the `B/O` (back order) column as the shipped quantity. The prompt and the field descriptions now explain the three quantity columns; before, rows that shipped nothing could come out as shipped, which validation caught.
