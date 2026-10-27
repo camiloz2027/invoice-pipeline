@@ -414,7 +414,7 @@ def main() -> None:
     setup_logging(config)
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
-    for vendor_dir in vendor_folders(config.crops_dir):
+    for vendor_dir in vendor_folders(config.crops_dir, config.vendors_dir):
         extracted_dir = config.extracted_dir / vendor_dir.name
         extracted += len(extract_all(client, vendor_dir, extracted_dir))
     logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)

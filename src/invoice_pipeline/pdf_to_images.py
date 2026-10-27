@@ -93,16 +93,26 @@ def convert_all(raw_dir: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> dict
 
 
 def main() -> None:
-    """Convert every PDF of every known vendor in the raw folder (manual run)."""
+    """Convert every PDF in every vendor folder of the raw folder (manual run).
+
+    A vendor needs no settings yet: its pages must exist first so that its
+    crop boxes can be chosen with pick_boxes.py.
+    """
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
-    from invoice_pipeline.vendors import vendor_folders
+    from invoice_pipeline.vendors import settings_path
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
     converted = 0
-    for vendor_dir in vendor_folders(config.raw_dir):
+    for vendor_dir in sorted(p for p in config.raw_dir.iterdir() if p.is_dir()):
+        if not settings_path(config.vendors_dir, vendor_dir.name).is_file():
+            logger.info(
+                "%s has no crop settings yet: run pick_boxes.py %s",
+                vendor_dir.name,
+                vendor_dir.name,
+            )
         converted += len(convert_all(vendor_dir, config.images_dir / vendor_dir.name))
     logger.info("Done: %d PDF(s) converted. Images in %s", converted, config.images_dir)
 

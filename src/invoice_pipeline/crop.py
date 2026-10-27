@@ -7,25 +7,17 @@ from pathlib import Path
 
 from PIL import Image
 
+from invoice_pipeline.vendors import Box, validate_box
+
 logger = logging.getLogger(__name__)
 
-# (left, top, right, bottom) as fractions of the page, from 0 to 1. Each vendor's
-# box lives in vendors.py; there is deliberately no default box, so a page is
-# never cropped with another vendor's region.
-CropBox = tuple[float, float, float, float]
+# Each vendor's boxes live in data/vendors/ (see vendors.py); there is deliberately
+# no default box, so a page is never cropped with another vendor's region.
 
 
-def _validate_box(box: CropBox) -> None:
-    left, top, right, bottom = box
-    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
-        raise ValueError(
-            f"Invalid crop box {box}: expected 0 <= left < right <= 1 and 0 <= top < bottom <= 1"
-        )
-
-
-def crop_image(image_path: Path, output_path: Path, box: CropBox) -> Path:
+def crop_image(image_path: Path, output_path: Path, box: Box) -> Path:
     """Crop one image to ``box`` (fractions of its size) and save it as ``output_path``."""
-    _validate_box(box)
+    validate_box(box)
     left, top, right, bottom = box
 
     with Image.open(image_path) as image:
@@ -42,7 +34,7 @@ def crop_image(image_path: Path, output_path: Path, box: CropBox) -> Path:
     return output_path
 
 
-def crop_all(images_dir: Path, crops_dir: Path, box: CropBox) -> dict[Path, list[Path]]:
+def crop_all(images_dir: Path, crops_dir: Path, box: Box) -> dict[Path, list[Path]]:
     """Crop every page image under ``images_dir`` into ``crops_dir``, keeping the layout.
 
     ``images_dir/<invoice>/page_001.png`` becomes ``crops_dir/<invoice>/page_001.png``.
@@ -52,7 +44,7 @@ def crop_all(images_dir: Path, crops_dir: Path, box: CropBox) -> dict[Path, list
 
     Returns a mapping of each invoice folder to its cropped image paths.
     """
-    _validate_box(box)
+    validate_box(box)
     images_dir, crops_dir = Path(images_dir), Path(crops_dir)
     if not images_dir.is_dir():
         logger.warning("Input folder does not exist: %s", images_dir)
@@ -84,14 +76,14 @@ def main() -> None:
     """Crop every converted page image of every known vendor (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
-    from invoice_pipeline.vendors import VENDORS, vendor_folders
+    from invoice_pipeline.vendors import load_vendor, vendor_folders
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
     cropped = 0
-    for vendor_dir in vendor_folders(config.images_dir):
-        box = VENDORS[vendor_dir.name].body_box
+    for vendor_dir in vendor_folders(config.images_dir, config.vendors_dir):
+        box = load_vendor(config.vendors_dir, vendor_dir.name).body_box
         cropped += len(crop_all(vendor_dir, config.crops_dir / vendor_dir.name, box))
     logger.info("Done: %d invoice(s) cropped. Crops in %s", cropped, config.crops_dir)
 

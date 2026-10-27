@@ -236,7 +236,7 @@ def main() -> None:
     config.ensure_dirs()
     setup_logging(config)
     reports: dict[Path, ValidationReport] = {}
-    for vendor_dir in vendor_folders(config.extracted_dir):
+    for vendor_dir in vendor_folders(config.extracted_dir, config.vendors_dir):
         reports.update(validate_all(vendor_dir))
     failed = sum(1 for report in reports.values() if not report.ok)
     logger.info("Done: %d invoice(s) validated, %d failed.", len(reports), failed)

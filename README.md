@@ -17,9 +17,11 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 | 6 | Price analytics and notebook | `analytics.py` | Planned |
 | 7 | CLI, demo, weekly run script, CI | `cli.py`, `demo.py` | Planned |
 
-Each vendor has its own folder in `data/raw/`, named exactly like its entry in
-[vendors.py](src/invoice_pipeline/vendors.py), which holds that vendor's crop region.
-A folder with no entry is skipped, so a page is never cropped with another vendor's region.
+Each vendor has its own folder in `data/raw/` and its own settings file,
+`data/vendors/<same name>.toml`, which holds the crop regions (see
+[vendors.py](src/invoice_pipeline/vendors.py)). A folder with no settings file is skipped,
+so a page is never cropped with another vendor's region. Settings stay on your machine:
+`data/` is ignored by Git.
 
 The invoice date is not read from the invoice. Each extraction result carries an
 `extracted_at` date, the day it was processed, which is set by the code and not by the AI.
@@ -72,14 +74,33 @@ python src/invoice_pipeline/validate.py        # checks data/interim/extracted, 
 Running a stage again overwrites its previous output, so you can tune and repeat it freely.
 The exception to "freely" is `extract.py`, which calls the API and costs a little every time.
 
-To choose the crop region for a new layout, draw a percentage grid over a page image and
-read the (left, top, right, bottom) fractions off it:
+### Choosing a vendor's crop regions
+
+Run `pdf_to_images.py` first, then open the picker for that vendor:
 
 ```bash
-python src/invoice_pipeline/grid_overlay.py data/interim/images/<vendor>/<invoice>/page_001.png
+python src/invoice_pipeline/pick_boxes.py <vendor>
 ```
 
-The result is saved in `data/interim/grids/`.
+It opens a page in your browser with the vendor's pages. Drag on a page to select a zone; drag
+its handles to resize it or drag inside it to move it. Then click **Save as body zone** (the
+invoice lines and totals) or **Save as invoice-number zone**. A saved zone can be loaded back
+with the **Edit saved ...** buttons, and **Select whole page** starts from the full page.
+The zone is written to `data/vendors/<vendor>.toml`, and saved zones are drawn on every page so
+you can check that they fit all of them. Click **Finish** to stop the picker (or press Ctrl+C in
+the terminal).
+
+The picker runs a small server that only your own computer can reach, protected by a random
+access token, and loads nothing from the internet. The pages shown are full pages, so keep an
+eye on browser extensions that can read page contents.
+
+A settings file is plain text, one zone per line, as fractions of the page
+(left, top, right, bottom):
+
+```toml
+body_box = [0.025, 0.35, 0.9, 0.9]
+id_box = [0.59, 0.15, 0.72, 0.17]
+```
 
 Logs go to the console and to `data/logs/pipeline.log`.
 
