@@ -89,15 +89,18 @@ def convert_all(raw_dir: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> dict
 
 
 def main() -> None:
-    """Convert every PDF in the configured raw folder (manual run)."""
+    """Convert every PDF of every known vendor in the raw folder (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
+    from invoice_pipeline.vendors import vendor_folders
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
-    results = convert_all(config.raw_dir, config.images_dir)
-    logger.info("Done: %d PDF(s) converted. Images in %s", len(results), config.images_dir)
+    converted = 0
+    for vendor_dir in vendor_folders(config.raw_dir):
+        converted += len(convert_all(vendor_dir, config.images_dir / vendor_dir.name))
+    logger.info("Done: %d PDF(s) converted. Images in %s", converted, config.images_dir)
 
 
 if __name__ == "__main__":

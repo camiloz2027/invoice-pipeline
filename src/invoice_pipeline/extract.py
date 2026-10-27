@@ -404,18 +404,20 @@ def extract_all(
 
 
 def main() -> None:
-    """Extract every cropped invoice (manual run)."""
+    """Extract every cropped invoice of every known vendor (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
+    from invoice_pipeline.vendors import vendor_folders
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
     client = anthropic.Anthropic(api_key=config.require_api_key())
-    results = extract_all(client, config.crops_dir, config.extracted_dir)
-    logger.info(
-        "Done: %d invoice(s) extracted. JSON files in %s", len(results), config.extracted_dir
-    )
+    extracted = 0
+    for vendor_dir in vendor_folders(config.crops_dir):
+        extracted_dir = config.extracted_dir / vendor_dir.name
+        extracted += len(extract_all(client, vendor_dir, extracted_dir))
+    logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
 
 
 if __name__ == "__main__":

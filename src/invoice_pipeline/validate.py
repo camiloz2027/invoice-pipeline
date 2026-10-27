@@ -227,14 +227,17 @@ def validate_all(extracted_dir: Path) -> dict[Path, ValidationReport]:
 
 
 def main() -> None:
-    """Validate every extracted invoice (manual run)."""
+    """Validate every extracted invoice of every known vendor (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
+    from invoice_pipeline.vendors import vendor_folders
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
-    reports = validate_all(config.extracted_dir)
+    reports: dict[Path, ValidationReport] = {}
+    for vendor_dir in vendor_folders(config.extracted_dir):
+        reports.update(validate_all(vendor_dir))
     failed = sum(1 for report in reports.values() if not report.ok)
     logger.info("Done: %d invoice(s) validated, %d failed.", len(reports), failed)
 
