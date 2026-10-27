@@ -67,6 +67,7 @@ active):
 ```bash
 python src/invoice_pipeline/pdf_to_images.py   # data/raw -> data/interim/images
 python src/invoice_pipeline/crop.py            # data/interim/images -> data/interim/body_crops and id_crops
+python src/invoice_pipeline/group.py           # data/interim/id_crops -> data/interim/groups (calls the API)
 python src/invoice_pipeline/extract.py         # data/interim/body_crops -> data/interim/extracted
 python src/invoice_pipeline/validate.py        # checks data/interim/extracted, changes nothing
 ```
@@ -103,6 +104,24 @@ id_box = [0.59, 0.15, 0.72, 0.17]
 ```
 
 Logs go to the console and to `data/logs/pipeline.log`.
+
+## Grouping pages by invoice number
+
+An invoice can span several PDFs, and a PDF can hold several invoices, so pages are grouped
+by the invoice number printed on them. `group.py` sends the small number crops of a vendor
+(`data/interim/id_crops/<vendor>/`) to Claude Sonnet 5.5 (`claude-sonnet-5-5`) in one request.
+Each crop comes after a neutral label (`P01`, `P02`, ...): the AI never sees a file name or a
+vendor name, and the code keeps the table from label to page. Pages whose crop is identical
+are read once.
+
+The result is `data/interim/groups/<vendor>.json`:
+
+- `groups`: invoice number → its pages (paths relative to the crops folders).
+- `review`: pages whose number was unreadable (`null`), had spaces or odd characters, was
+  answered twice with different numbers, or was left out. They are never guessed or extracted.
+- `labels`, `readings`, `model` and token counts, kept for auditing.
+
+Running it again calls the API again and overwrites the file.
 
 ## Extraction output
 
