@@ -32,6 +32,7 @@ def test_absolute_data_dir_drives_derived_paths(monkeypatch, tmp_path):
     assert config.images_dir == tmp_path / "interim" / "images"
     assert config.body_crops_dir == tmp_path / "interim" / "body_crops"
     assert config.id_crops_dir == tmp_path / "interim" / "id_crops"
+    assert config.groups_dir == tmp_path / "interim" / "groups"
     assert config.processed_dir == tmp_path / "processed"
     assert config.db_path == tmp_path / "processed" / "invoices.db"
     assert config.failed_dir == tmp_path / "failed"
@@ -108,6 +109,7 @@ def test_ensure_dirs_creates_the_data_tree(monkeypatch, tmp_path):
         config.images_dir,
         config.body_crops_dir,
         config.id_crops_dir,
+        config.groups_dir,
         config.processed_dir,
         config.failed_dir,
         config.logs_dir,

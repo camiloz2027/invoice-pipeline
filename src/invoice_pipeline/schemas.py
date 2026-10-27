@@ -1,6 +1,11 @@
-"""Data shapes of the extraction stage.
+"""Data shapes of the grouping and the extraction stages.
 
-Two layers:
+Grouping (``group.py``) reads the invoice number of every page:
+
+* ``NumbersReading`` is what the AI returns, one ``PageNumber`` per label.
+* ``InvoiceGroups`` is the JSON saved per vendor: the pages of each invoice number.
+
+Extraction (``extract.py``) has two layers:
 
 * ``PageExtraction`` is what the AI returns for ONE page image. Its JSON schema
   is sent to the API as the required output format, so the response always has
@@ -15,6 +20,43 @@ from __future__ import annotations
 import datetime
 
 from pydantic import BaseModel, Field
+
+
+class PageNumber(BaseModel):
+    """The invoice number read from one number crop."""
+
+    label: str = Field(description="The label given before the image, copied exactly.")
+    invoice_number: str | None = Field(
+        description=(
+            "The invoice number exactly as printed, with no spaces. Null if it cannot be read "
+            "with certainty."
+        )
+    )
+
+
+class NumbersReading(BaseModel):
+    """What the AI returns for a vendor: one entry per label."""
+
+    pages: list[PageNumber] = Field(
+        description="One entry for every label, in the order the images were given."
+    )
+
+
+class InvoiceGroups(BaseModel):
+    """The JSON saved per vendor by ``group.py``. Paths are relative to the crops folders."""
+
+    model: str
+    created_at: datetime.datetime
+    input_tokens: int
+    output_tokens: int
+    # Invoice number -> the pages of that invoice, sorted by PDF folder and page.
+    groups: dict[str, list[str]]
+    # Pages whose number was unreadable, ambiguous or odd: nobody extracts them.
+    review: list[str]
+    # Label -> the pages that share that image (exact duplicates are read once).
+    labels: dict[str, list[str]]
+    # What the AI answered, kept for auditing.
+    readings: list[PageNumber]
 
 
 class InvoiceLine(BaseModel):
