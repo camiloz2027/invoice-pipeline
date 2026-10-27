@@ -9,11 +9,9 @@ from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# (left, top, right, bottom) as fractions of the page, from 0 to 1.
-# Fractions do not depend on the DPI used to render the pages. The values were
-# picked by eye on a grid overlay of the single supported vendor's invoice.
-CROP_BOX = (0.025, 0.35, 0.9, 0.9)
-
+# (left, top, right, bottom) as fractions of the page, from 0 to 1. Each vendor's
+# box lives in vendors.py; there is deliberately no default box, so a page is
+# never cropped with another vendor's region.
 CropBox = tuple[float, float, float, float]
 
 
@@ -25,7 +23,7 @@ def _validate_box(box: CropBox) -> None:
         )
 
 
-def crop_image(image_path: Path, output_path: Path, box: CropBox = CROP_BOX) -> Path:
+def crop_image(image_path: Path, output_path: Path, box: CropBox) -> Path:
     """Crop one image to ``box`` (fractions of its size) and save it as ``output_path``."""
     _validate_box(box)
     left, top, right, bottom = box
@@ -44,7 +42,7 @@ def crop_image(image_path: Path, output_path: Path, box: CropBox = CROP_BOX) -> 
     return output_path
 
 
-def crop_all(images_dir: Path, crops_dir: Path, box: CropBox = CROP_BOX) -> dict[Path, list[Path]]:
+def crop_all(images_dir: Path, crops_dir: Path, box: CropBox) -> dict[Path, list[Path]]:
     """Crop every page image under ``images_dir`` into ``crops_dir``, keeping the layout.
 
     ``images_dir/<invoice>/page_001.png`` becomes ``crops_dir/<invoice>/page_001.png``.
@@ -83,15 +81,19 @@ def crop_all(images_dir: Path, crops_dir: Path, box: CropBox = CROP_BOX) -> dict
 
 
 def main() -> None:
-    """Crop every converted page image (manual run)."""
+    """Crop every converted page image of every known vendor (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
+    from invoice_pipeline.vendors import VENDORS, vendor_folders
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
-    results = crop_all(config.images_dir, config.crops_dir)
-    logger.info("Done: %d invoice(s) cropped. Crops in %s", len(results), config.crops_dir)
+    cropped = 0
+    for vendor_dir in vendor_folders(config.images_dir):
+        box = VENDORS[vendor_dir.name].body_box
+        cropped += len(crop_all(vendor_dir, config.crops_dir / vendor_dir.name, box))
+    logger.info("Done: %d invoice(s) cropped. Crops in %s", cropped, config.crops_dir)
 
 
 if __name__ == "__main__":

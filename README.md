@@ -17,8 +17,9 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 | 6 | Price analytics and notebook | `analytics.py` | Planned |
 | 7 | CLI, demo, weekly run script, CI | `cli.py`, `demo.py` | Planned |
 
-The first version targets the invoice layout of a single vendor, so the crop region
-is fixed (`CROP_BOX` in [crop.py](src/invoice_pipeline/crop.py)).
+Each vendor has its own folder in `data/raw/`, named exactly like its entry in
+[vendors.py](src/invoice_pipeline/vendors.py), which holds that vendor's crop region.
+A folder with no entry is skipped, so a page is never cropped with another vendor's region.
 
 The invoice date is not read from the invoice. Each extraction result carries an
 `extracted_at` date, the day it was processed, which is set by the code and not by the AI.
@@ -56,7 +57,7 @@ Settings are read from `.env` (or from the environment, which takes precedence) 
 
 ## Usage
 
-Put your PDF invoices in `data/raw/`, then run each stage (with the virtual environment
+Put your PDF invoices in `data/raw/<vendor>/`, then run each stage (with the virtual environment
 active):
 
 ```bash
@@ -73,7 +74,7 @@ To choose the crop region for a new layout, draw a percentage grid over a page i
 read the (left, top, right, bottom) fractions off it:
 
 ```bash
-python src/invoice_pipeline/grid_overlay.py data/interim/images/<invoice>/page_001.png
+python src/invoice_pipeline/grid_overlay.py data/interim/images/<vendor>/<invoice>/page_001.png
 ```
 
 The result is saved in `data/interim/grids/`.
