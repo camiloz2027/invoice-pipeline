@@ -42,8 +42,12 @@ class Config:
         return self.data_dir / "interim" / "images"
 
     @property
-    def crops_dir(self) -> Path:
-        return self.data_dir / "interim" / "crops"
+    def body_crops_dir(self) -> Path:
+        return self.data_dir / "interim" / "body_crops"
+
+    @property
+    def id_crops_dir(self) -> Path:
+        return self.data_dir / "interim" / "id_crops"
 
     @property
     def extracted_dir(self) -> Path:
@@ -75,7 +79,8 @@ class Config:
             self.raw_dir,
             self.vendors_dir,
             self.images_dir,
-            self.crops_dir,
+            self.body_crops_dir,
+            self.id_crops_dir,
             self.extracted_dir,
             self.processed_dir,
             self.failed_dir,

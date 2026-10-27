@@ -73,7 +73,11 @@ def crop_all(images_dir: Path, crops_dir: Path, box: Box) -> dict[Path, list[Pat
 
 
 def main() -> None:
-    """Crop every converted page image of every known vendor (manual run)."""
+    """Crop every converted page image of every known vendor (manual run).
+
+    Two crops per page, with the same relative path: the body (lines and totals)
+    and, when the vendor has an ``id_box``, the invoice number.
+    """
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
     from invoice_pipeline.vendors import load_vendor, vendor_folders
@@ -83,9 +87,20 @@ def main() -> None:
     setup_logging(config)
     cropped = 0
     for vendor_dir in vendor_folders(config.images_dir, config.vendors_dir):
-        box = load_vendor(config.vendors_dir, vendor_dir.name).body_box
-        cropped += len(crop_all(vendor_dir, config.crops_dir / vendor_dir.name, box))
-    logger.info("Done: %d invoice(s) cropped. Crops in %s", cropped, config.crops_dir)
+        vendor = load_vendor(config.vendors_dir, vendor_dir.name)
+        cropped += len(
+            crop_all(vendor_dir, config.body_crops_dir / vendor_dir.name, vendor.body_box)
+        )
+        if vendor.id_box is None:
+            logger.warning("%s has no id_box: no invoice-number crops", vendor_dir.name)
+        else:
+            crop_all(vendor_dir, config.id_crops_dir / vendor_dir.name, vendor.id_box)
+    logger.info(
+        "Done: %d invoice(s) cropped. Crops in %s and %s",
+        cropped,
+        config.body_crops_dir,
+        config.id_crops_dir,
+    )
 
 
 if __name__ == "__main__":

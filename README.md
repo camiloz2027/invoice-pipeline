@@ -66,8 +66,8 @@ active):
 
 ```bash
 python src/invoice_pipeline/pdf_to_images.py   # data/raw -> data/interim/images
-python src/invoice_pipeline/crop.py            # data/interim/images -> data/interim/crops
-python src/invoice_pipeline/extract.py         # data/interim/crops -> data/interim/extracted
+python src/invoice_pipeline/crop.py            # data/interim/images -> data/interim/body_crops and id_crops
+python src/invoice_pipeline/extract.py         # data/interim/body_crops -> data/interim/extracted
 python src/invoice_pipeline/validate.py        # checks data/interim/extracted, changes nothing
 ```
 
