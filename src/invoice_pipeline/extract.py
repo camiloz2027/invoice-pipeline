@@ -254,31 +254,35 @@ def extract_page(
     return page
 
 
-def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_dir: Path) -> Path:
-    """Extract every page of one invoice and save the final JSON.
+def extract_invoice(
+    client: anthropic.Anthropic,
+    page_images: list[Path],
+    invoice_number: str | None,
+    extracted_dir: Path,
+    name: str,
+) -> Path:
+    """Extract the pages of one invoice and save the final JSON.
 
-    ``invoice_dir`` holds ``page_001.png``, ... and the JSON is saved as
-    ``extracted_dir/<invoice folder name>.json``. The invoice number, the
-    extraction date, each line's page and the joining of descriptions that run
-    over two pages are done here, by the code, not by the AI.
+    ``page_images`` are the body crops of the invoice in reading order; they can
+    come from different PDFs. The JSON is saved as ``extracted_dir/<name>.json``
+    and ``name`` is also what the log calls the invoice. The invoice number, the
+    extraction date, each line's page (its position in ``page_images``) and the
+    joining of descriptions that run over two pages are done here, by the code,
+    not by the AI.
 
     If any page fails, nothing is saved: a JSON with missing pages would look
     like a complete invoice. Running it again overwrites the previous JSON.
     """
-    invoice_dir, extracted_dir = Path(invoice_dir), Path(extracted_dir)
-    page_images = sorted(invoice_dir.glob("page_*.png"))
+    extracted_dir = Path(extracted_dir)
     if not page_images:
-        raise ExtractionError(f"No page images found in {invoice_dir}")
+        raise ExtractionError(f"No page images given for {name}")
 
     lines: list[ExtractedLine] = []
     unfulfilled: list[ExtractedUnfulfilled] = []
     totals: InvoiceTotals | None = None
     # True while the pages being read belong to the "Unfulfilled supply" list.
     in_unfulfilled = False
-    for image_path in page_images:
-        # The page number comes from the file name, so a page missing from the
-        # folder cannot shift the numbering of the ones after it.
-        page_number = int(image_path.stem.removeprefix("page_"))
+    for page_number, image_path in enumerate(page_images, start=1):
         page = extract_page(client, image_path)
 
         # The list continues on the next page without its title, so the AI reads
@@ -288,23 +292,21 @@ def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_di
         if continues_list:
             logger.info(
                 "%s page %d continues the unfulfilled list; reading it again",
-                invoice_dir.name,
+                name,
                 page_number,
             )
             try:
                 page = extract_page(client, image_path, continues_unfulfilled=True)
             except ExtractionError as error:
                 # The first reading is still there to fall back on.
-                logger.warning(
-                    "%s page %d: reading it again failed (%s)", invoice_dir.name, page_number, error
-                )
+                logger.warning("%s page %d: reading it again failed (%s)", name, page_number, error)
             if _looks_like_unfulfilled_rows(page):
                 # Still read as items. The code knows what they are, so it moves them.
                 moved = _lines_to_unfulfilled(page.lines, lines)
                 logger.warning(
                     "%s page %d: moved %d of %d line(s) to unfulfilled by the code "
                     "(no reason available; lines without a UPC are dropped)",
-                    invoice_dir.name,
+                    name,
                     page_number,
                     len(moved),
                     len(page.lines),
@@ -331,7 +333,7 @@ def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_di
             else:
                 logger.warning(
                     "%s page %d starts with %r but there is no previous line to join it to",
-                    invoice_dir.name,
+                    name,
                     page_number,
                     fragment,
                 )
@@ -346,23 +348,23 @@ def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_di
             else:
                 logger.info(
                     "%s page %d shows more of the totals block; joining it with the first",
-                    invoice_dir.name,
+                    name,
                     page_number,
                 )
-                totals = _merge_totals(totals, page.totals, invoice_dir.name, page_number)
+                totals = _merge_totals(totals, page.totals, name, page_number)
         logger.info(
             "Extracted %s page %d: %d line(s), %d unfulfilled",
-            invoice_dir.name,
+            name,
             page_number,
             len(page_lines),
             len(page.unfulfilled),
         )
 
     if totals is None:
-        logger.warning("%s: no totals block found on any page", invoice_dir.name)
+        logger.warning("%s: no totals block found on any page", name)
 
     result = InvoiceExtraction(
-        invoice_number=invoice_number_from_name(invoice_dir.name),
+        invoice_number=invoice_number,
         extracted_at=datetime.date.today(),
         lines=lines,
         unfulfilled=unfulfilled,
@@ -370,7 +372,7 @@ def extract_invoice(client: anthropic.Anthropic, invoice_dir: Path, extracted_di
     )
 
     extracted_dir.mkdir(parents=True, exist_ok=True)
-    output_path = extracted_dir / f"{invoice_dir.name}.json"
+    output_path = extracted_dir / f"{name}.json"
     output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     logger.info("Saved %s: %d line(s)", output_path.name, len(lines))
     return output_path
@@ -397,7 +399,14 @@ def extract_all(
     results: dict[Path, Path] = {}
     for invoice_dir in invoice_dirs:
         try:
-            results[invoice_dir] = extract_invoice(client, invoice_dir, extracted_dir)
+            # Until pages are grouped by invoice number, one folder (one PDF) is one invoice.
+            results[invoice_dir] = extract_invoice(
+                client,
+                sorted(invoice_dir.glob("page_*.png")),
+                invoice_number_from_name(invoice_dir.name),
+                extracted_dir,
+                invoice_dir.name,
+            )
         except ExtractionError:
             logger.exception("Skipping %s", invoice_dir.name)
     return results
@@ -414,7 +423,7 @@ def main() -> None:
     setup_logging(config)
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
-    for vendor_dir in vendor_folders(config.crops_dir, config.vendors_dir):
+    for vendor_dir in vendor_folders(config.body_crops_dir, config.vendors_dir):
         extracted_dir = config.extracted_dir / vendor_dir.name
         extracted += len(extract_all(client, vendor_dir, extracted_dir))
     logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
