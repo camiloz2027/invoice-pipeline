@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 
+from invoice_pipeline.orientation import straighten
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_DPI = 200
@@ -26,6 +28,7 @@ def _folder_name(pdf_path: Path) -> str:
 def convert_pdf(pdf_path: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> list[Path]:
     """Render every page of a PDF to ``images_dir/<pdf name>/page_001.png``, ...
 
+    Each page is turned upright first if the scan is rotated (see orientation.py).
     Running it again overwrites the previous result: leftover pages from an
     earlier run are removed first, so the folder always mirrors the PDF.
 
@@ -49,6 +52,7 @@ def convert_pdf(pdf_path: Path, images_dir: Path, dpi: int = DEFAULT_DPI) -> lis
             image_paths = []
             for number, page in enumerate(document, start=1):
                 image = page.render(scale=dpi / PDF_POINTS_PER_INCH).to_pil()
+                image = straighten(image, f"{pdf_path.name} page {number}")
                 image_path = output_dir / f"page_{number:03d}.png"
                 image.save(image_path, dpi=(dpi, dpi))
                 image_paths.append(image_path)

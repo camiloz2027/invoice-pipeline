@@ -9,7 +9,7 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 
 | # | Stage | Module | Status |
 |---|-------|--------|--------|
-| 1 | PDF → one PNG per page | `pdf_to_images.py` | Done |
+| 1 | PDF → one PNG per page, rotated pages turned upright | `pdf_to_images.py`, `orientation.py` | Done |
 | 2 | Crop each page to the region with the invoice data | `crop.py` | Done |
 | 3 | AI extraction (vision) | `extract.py` | Done |
 | 4 | Validation | `validate.py` | Done |
@@ -30,6 +30,8 @@ to the processing requirements and security standards that apply to your data.
 ## Requirements
 
 - Python 3.11+
+- [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) installed on the system (for example
+  `brew install tesseract` on macOS). It runs locally and is used only to detect page orientation.
 
 ## Installation (development)
 
