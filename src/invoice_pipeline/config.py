@@ -34,16 +34,16 @@ class Config:
         return self.data_dir / "raw"
 
     @property
+    def vendors_dir(self) -> Path:
+        return self.data_dir / "vendors"
+
+    @property
     def images_dir(self) -> Path:
         return self.data_dir / "interim" / "images"
 
     @property
     def crops_dir(self) -> Path:
         return self.data_dir / "interim" / "crops"
-
-    @property
-    def grids_dir(self) -> Path:
-        return self.data_dir / "interim" / "grids"
 
     @property
     def extracted_dir(self) -> Path:
@@ -73,9 +73,9 @@ class Config:
         """Create every data directory that does not exist yet."""
         for directory in (
             self.raw_dir,
+            self.vendors_dir,
             self.images_dir,
             self.crops_dir,
-            self.grids_dir,
             self.extracted_dir,
             self.processed_dir,
             self.failed_dir,
