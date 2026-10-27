@@ -50,6 +50,10 @@ class Config:
         return self.data_dir / "interim" / "id_crops"
 
     @property
+    def groups_dir(self) -> Path:
+        return self.data_dir / "interim" / "groups"
+
+    @property
     def extracted_dir(self) -> Path:
         return self.data_dir / "interim" / "extracted"
 
@@ -81,6 +85,7 @@ class Config:
             self.images_dir,
             self.body_crops_dir,
             self.id_crops_dir,
+            self.groups_dir,
             self.extracted_dir,
             self.processed_dir,
             self.failed_dir,
