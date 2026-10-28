@@ -13,13 +13,20 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `group.py`: reads the invoice number of every page from the `id_crops` with Claude Sonnet 5.5 and groups the pages by it in `data/interim/groups/<vendor>.json`. The AI only sees neutral labels, never file or vendor names; unreadable or odd numbers go to a review list.
 
+- Per-vendor `notes` in the settings file: free text added to the extraction prompt for that vendor only. `vendors.py` accepts the key (`Vendor.notes`, `load_notes`) and `save_box` keeps it.
+- `size` is always filled: when the AI leaves it empty, the code takes it from the description (for example a description split over two pages), and a trailing `*` is removed.
+
 ### Changed
+- **Breaking:** the extraction schema and prompt are now vendor-neutral. A line has `item_code`, `upc`, `description`, `size`, `quantity`, `qty_ordered`, `qty_backordered`, `list_price`, `price`, `price_per`, `unit_price` and `line_total`. `price` is the price actually paid after any discount, so `quantity` x `price` = `line_total`. `validate.py` still uses the old names and has to be updated.
+- The extraction prompt has two invented example rows and rules for the barcode (`upc`: digits only, at least 10), the quantity and the discounted price. The model effort is now `medium`, the token limit 16000 and the tokens used by each page are logged.
+- **Breaking:** `extract.py` extracts one invoice per invoice number, from the groups file written by `group.py`, instead of one invoice per PDF. Run `group.py` first. Pages that are exact copies of another page of the same invoice are left out, and pages in the review list are not extracted.
 - The body crops folder `data/interim/crops` is now `data/interim/body_crops` (`Config.crops_dir` is now `body_crops_dir`).
 - **Breaking:** PDFs must now live in `data/raw/<vendor>/`, and every stage reads and writes `data/interim/<stage>/<vendor>/`.
 - `crop.py` no longer has a default crop box; it must be given one.
 - `pdf_to_images.py` converts every vendor folder, even one with no settings yet, so its crop regions can be chosen on its pages.
 
 ### Removed
+- **Breaking:** the lists of items that were not supplied (`unfulfilled`), `other_columns`, `discount_pct` and `piece_price` are no longer extracted, and the code that read such lists again was removed. A row with neither a price nor a total is dropped with a warning.
 - `grid_overlay.py` and the `data/interim/grids/` folder: `pick_boxes.py` replaces them for choosing crop regions.
 
 ### Fixed

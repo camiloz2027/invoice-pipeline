@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -13,141 +14,141 @@ import pydantic
 
 from invoice_pipeline.schemas import (
     ExtractedLine,
-    ExtractedUnfulfilled,
     InvoiceExtraction,
+    InvoiceGroups,
     InvoiceLine,
     InvoiceTotals,
     PageExtraction,
-    UnfulfilledItem,
 )
 
 logger = logging.getLogger(__name__)
 
 MODEL = "claude-haiku-5-5"
-# One page is about 1,100 tokens of JSON, so this leaves plenty of room.
-MAX_TOKENS = 10000
-# Reading a table does not need deep reasoning; a low effort keeps it cheap and fast.
-EFFORT = "low"
+# A page is a few thousand tokens of JSON, and this model's reasoning counts toward the limit.
+MAX_TOKENS = 16000
+# Reading a table needs little reasoning, but strike-throughs and faint print do.
+EFFORT = "medium"
 
 # What each field is lives in the field descriptions of ``schemas.py`` (they
 # travel inside the response schema). The prompt holds how to behave and the
 # rules that cross several fields.
 PROMPT = """\
-This image is one cropped page of a vendor invoice. Columns are separated by
-thin vertical lines. Read the page and fill the sections of the response.
+This image is one cropped page of a vendor invoice. Read the page and fill the
+sections of the response. Describe every column by what it means, not by its header.
 
 1. lines: the item table
-Every item row, from top to bottom. A row has quantities, a UPC and prices.
-- Each column has its own cell. Never put text from the Brand column into the
-  description, and never complete text that is cut off at the edge of a cell:
-  copy what is visible.
-- If a description wraps over several lines, join them with a single space.
-- Three quantity columns sit side by side: 'Qty Ord.' is the quantity ordered,
-  'Shipped' is the quantity shipped now, and 'B/O' ('A Venir', back order) is
-  the quantity ordered that was NOT shipped and will come later. They often
-  hold the same number. qty_shipped is ONLY the 'Shipped' column: a row with
-  Shipped 0 and B/O 1 has qty_shipped 0. Never copy B/O into qty_shipped.
-- Copy each value exactly as printed. Do not calculate, correct or guess.
-  If a value is not visible, use null.
+Every item row, from top to bottom. Copy each value exactly as printed. Do not
+calculate, correct or guess. If a value is not printed or cannot be read, use null.
+- Codes: upc is a barcode, made only of digits, at least 10 of them. Any other code
+  (with letters, or shorter) is the vendor's own item_code. A cell such as "N/A" is null.
+- description: join its lines with a single space. Never put text from another
+  column into it, and never complete text that is cut off at the edge of the cell.
+- size: the pack or size of the item, such as 6/1.75L or 12/170G. Take it from its own
+  column; if it is split over two columns (a count and a size), write count/size.
+  If there is no size column, take it from the description, which keeps its text.
+- Quantities: an invoice can print the quantity ordered, shipped and back-ordered
+  ('B/O', 'A Venir': ordered but NOT shipped, it will come later). quantity is the one
+  that makes quantity x price = line_total, usually the shipped one: a row that shipped 0
+  has quantity 0. A single quantity column is quantity. If the table header has a column
+  for the quantity ordered or back-ordered, fill qty_ordered or qty_backordered in EVERY
+  row of the page (an empty cell is null), even when the page looks different from
+  the others. Leave them null only when the invoice has no such column.
+- Prices: price is the price actually paid, after any discount, for one selling unit
+  (usually a case): quantity x price = line_total. Choose the column by that
+  arithmetic, not by its header. When a row prints a discount percentage, price is
+  the column AFTER the discount and list_price the column before it: never put the
+  price before the discount in price. list_price is the price before the discount,
+  only when the invoice prints it next to a different price. unit_price is the price paid
+  for one piece inside the case, only when the invoice prints it in addition to price.
+  price_per is the unit that price refers to, as printed (such as CS or ea); null if
+  the invoice prints none. Never calculate a price.
+- line_total: the amount of the whole row, usually the rightmost number.
+  A value written '.00' is 0.
+- A row that charges a fee or a deposit instead of an item is not an item: skip it.
+  Skip columns that only carry a deposit or a tax.
+- Text written by hand (strike-throughs, ticks, notes) is not part of the invoice:
+  a row crossed out by hand is still a printed row, so read the printed text under
+  the mark and keep its quantity and prices.
+
+Example 1. A row printed with these cells:
+  Ord 5 | Shipped 5 | Code 12345 | EXAMPLE OAT DRINK 6/1.75L | UPC 012345678905 |
+  UOM CS | Price 32.80 | Disc 20 | Net Price 26.24 | Unit Price 4.37 | Extended 131.20
+is read as:
+  {"item_code": "12345", "upc": "012345678905", "description": "EXAMPLE OAT DRINK 6/1.75L",
+   "size": "6/1.75L", "quantity": 5, "qty_ordered": 5, "qty_backordered": null,
+   "list_price": 32.80, "price": 26.24, "price_per": "CS", "unit_price": 4.37,
+   "line_total": 131.20}
+because 5 x 26.24 = 131.20. The 32.80 is the price before the 20% discount.
+
+Example 2. A row printed with these cells:
+  Product 012345678912 | Qty shipped 36 | EXAMPLE BAR 55G | Unit price 3.18 | Per ea |
+  Amount 114.48
+is read as:
+  {"item_code": null, "upc": "012345678912", "description": "EXAMPLE BAR 55G",
+   "size": "55G", "quantity": 36, "qty_ordered": null, "qty_backordered": null,
+   "list_price": null, "price": 3.18, "price_per": "ea", "unit_price": null,
+   "line_total": 114.48}
 
 2. continued_description
-If the very top of the page has a line of text with no quantities, UPC or
+If the very top of the page has a line of text with no quantities, code or
 prices, it is the end of the description of the previous page's last row.
 Put that text here and do not create a row for it. Otherwise use null.
 
-3. unfulfilled: the "Unfulfilled supply" list
-Rows made of a UPC, an item number, a description, a quantity, a unit and a
-reason, ending with a date. This list can continue on the next page without
-its title, so any row that starts with a UPC and ends with a date belongs
-here and never in lines. If the page has no such rows, return an empty list.
-
-4. totals
+3. totals
 The invoice totals block is a few labelled amounts under the item table: an
-optional SUBTOTAL, fee or tax lines (for example DEPOSIT FEE, CONTAINER FEE,
-GST) and a "** TOTAL **" line. The block can be split over two pages, and a
-short invoice may print only the TOTAL line.
+optional subtotal, fee or tax lines (for example a deposit fee, a fuel surcharge,
+GST) and the final total. The block can be split over two pages, and a short
+invoice may print only the total.
 - Return totals as soon as ANY of those labels is visible on this page, even
-  if it is the only one (a page with just the "** TOTAL **" line still
-  returns totals with that total). Use null for totals only if none is visible.
-- Fill only what this page shows. subtotal is the amount next to SUBTOTAL and
-  total is the amount next to "** TOTAL **"; if that label is not on this page,
-  use null. Never use a fee, a tax or the last amount shown as the total.
-- charges are the fee and tax lines on this page, in order, without SUBTOTAL
-  and TOTAL.
+  if it is the only one (a page with just the total line still returns totals with
+  that total). Use null for totals only if none is visible.
+- Fill only what this page shows. subtotal is the amount next to the subtotal label
+  and total is the amount next to the final total label; if that label is not on
+  this page, use null. Never use a fee, a tax or the last amount shown as the total.
+- charges are the fee and tax lines on this page, in order, without the subtotal
+  and the total.
 
-Ignore everything else: column headers, footers and page numbers.
-"""
-
-
-# Added to the prompt when the code knows the page continues the "Unfulfilled
-# supply" list: without its title, the AI reads those rows as item lines.
-CONTINUATION_NOTE = """
-NOTE: this page continues the "Unfulfilled supply" list from the previous page.
-The black header row at the top is repeated on every page and does not mean the
-rows below are items. Put every row of this page in unfulfilled and return
-lines as an empty list.
+Ignore everything else: column headers, section headings (such as a storage area),
+footers with counts or weights, payment notes, page numbers, anything handwritten,
+and any list of items that were not supplied or are out of stock.
 """
 
 NUMBER_FIELDS = (
+    "quantity",
     "qty_ordered",
-    "qty_shipped",
+    "qty_backordered",
+    "list_price",
     "price",
-    "net_price",
-    "discount_pct",
     "unit_price",
-    "total",
+    "line_total",
 )
+
+
+# A pack size such as 12/325G, 6/6X38G or 6/1.75L, with no trailing "*".
+SIZE_PATTERN = re.compile(r"\d+(?:\.\d+)?(?:\s?[/xX]\s?\d+(?:\.\d+)?)+\s?[A-Za-z]+")
 
 
 class ExtractionError(Exception):
     """Raised when a page or an invoice cannot be extracted."""
 
 
+def _size_in(description: str) -> str | None:
+    """The pack size written at the end of a description, such as 12/325G, or None."""
+    matches = SIZE_PATTERN.findall(description)
+    return matches[-1].replace(" ", "") if matches else None
+
+
 def _is_empty_row(line: InvoiceLine) -> bool:
-    """True for a row with no UPC and no numbers, that is, just a piece of text.
+    """True for a row with no UPC, no item code and no numbers, that is, just a piece of text.
 
     At the top of a page it is the end of a description that ran over from the
     previous page, not an item.
     """
-    return line.upc is None and all(getattr(line, name) is None for name in NUMBER_FIELDS)
-
-
-def _looks_like_unfulfilled_rows(page: PageExtraction) -> bool:
-    """True if the page has item lines but none of them has a unit price.
-
-    Real item lines always have one. After an "Unfulfilled supply" list, such a
-    page is the continuation of that list.
-    """
-    return bool(page.lines) and all(line.unit_price is None for line in page.lines)
-
-
-def _lines_to_unfulfilled(
-    page_lines: list[InvoiceLine], known_lines: list[ExtractedLine]
-) -> list[UnfulfilledItem]:
-    """Turn lines the AI read as items into unfulfilled items, using what the code knows.
-
-    The fallback for when the AI cannot read an "Unfulfilled supply" page right.
-    The description comes from the item line with the same UPC, because the AI
-    only reads its last text column here. The quantity is what that line left
-    unshipped. The reason is not in the item columns, so it stays None. A line
-    without a UPC cannot be matched and is left out.
-    """
-    known_by_upc = {line.upc: line for line in known_lines if line.upc}
-    items = []
-    for line in page_lines:
-        if line.upc is None:
-            continue
-        known = known_by_upc.get(line.upc)
-        description = known.description if known else line.description
-        quantity = line.qty_shipped if line.qty_shipped is not None else line.qty_ordered
-        if known and known.qty_ordered is not None and known.qty_shipped is not None:
-            unshipped = known.qty_ordered - known.qty_shipped
-            if unshipped > 0:
-                quantity = unshipped
-        items.append(
-            UnfulfilledItem(upc=line.upc, description=description, quantity=quantity, reason=None)
-        )
-    return items
+    return (
+        line.upc is None
+        and line.item_code is None
+        and all(getattr(line, name) is None for name in NUMBER_FIELDS)
+    )
 
 
 def _merge_totals(
@@ -182,28 +183,23 @@ def _merge_totals(
     return InvoiceTotals(charges=charges, **merged)
 
 
-def invoice_number_from_name(name: str) -> str | None:
-    """Take the invoice number from a file or folder name ("Invoice_1234567" -> "1234567").
-
-    Uses the longest run of digits, so a short number such as the "2" in "copy 2"
-    does not win over the real one. Returns None when the name has no digits.
-    """
-    numbers = re.findall(r"\d+", name)
-    return max(numbers, key=len) if numbers else None
+def _prompt(notes: str | None) -> str:
+    """The prompt, with the vendor's notes at the end when it has any."""
+    if not notes:
+        return PROMPT
+    return f"{PROMPT}\nNotes about these invoices:\n{notes}\n"
 
 
 def extract_page(
-    client: anthropic.Anthropic, image_path: Path, continues_unfulfilled: bool = False
+    client: anthropic.Anthropic, image_path: Path, notes: str | None = None
 ) -> PageExtraction:
     """Send one page image to the AI and return what it read.
 
     The response schema is enforced by the API, and the SDK validates the reply
-    against ``PageExtraction``. ``continues_unfulfilled`` tells the AI that the
-    page continues the "Unfulfilled supply" list. Raises ExtractionError if the
-    call fails or the reply is unusable (a refusal, or a reply cut off at
-    ``MAX_TOKENS``).
+    against ``PageExtraction``. ``notes`` is the vendor's text for the prompt. Raises
+    ExtractionError if the call fails or the reply is unusable (a refusal, or a reply
+    cut off at ``MAX_TOKENS``).
     """
-    prompt = PROMPT + CONTINUATION_NOTE if continues_unfulfilled else PROMPT
     try:
         image_data = base64.standard_b64encode(Path(image_path).read_bytes()).decode("utf-8")
         response = client.messages.parse(
@@ -224,7 +220,7 @@ def extract_page(
                                 "data": image_data,
                             },
                         },
-                        {"type": "text", "text": prompt},
+                        {"type": "text", "text": _prompt(notes)},
                     ],
                 }
             ],
@@ -245,7 +241,7 @@ def extract_page(
             f"No result for {Path(image_path).name} (stop reason: {response.stop_reason})"
         )
 
-    logger.debug(
+    logger.info(
         "%s: %d input / %d output tokens",
         Path(image_path).name,
         response.usage.input_tokens,
@@ -260,6 +256,7 @@ def extract_invoice(
     invoice_number: str | None,
     extracted_dir: Path,
     name: str,
+    notes: str | None = None,
 ) -> Path:
     """Extract the pages of one invoice and save the final JSON.
 
@@ -268,7 +265,7 @@ def extract_invoice(
     and ``name`` is also what the log calls the invoice. The invoice number, the
     extraction date, each line's page (its position in ``page_images``) and the
     joining of descriptions that run over two pages are done here, by the code,
-    not by the AI.
+    not by the AI. ``notes`` is the vendor's text for the prompt.
 
     If any page fails, nothing is saved: a JSON with missing pages would look
     like a complete invoice. Running it again overwrites the previous JSON.
@@ -278,45 +275,9 @@ def extract_invoice(
         raise ExtractionError(f"No page images given for {name}")
 
     lines: list[ExtractedLine] = []
-    unfulfilled: list[ExtractedUnfulfilled] = []
     totals: InvoiceTotals | None = None
-    # True while the pages being read belong to the "Unfulfilled supply" list.
-    in_unfulfilled = False
     for page_number, image_path in enumerate(page_images, start=1):
-        page = extract_page(client, image_path)
-
-        # The list continues on the next page without its title, so the AI reads
-        # its rows as item lines. They give themselves away by having no unit
-        # price: read the page again, telling the AI what it is.
-        continues_list = in_unfulfilled and _looks_like_unfulfilled_rows(page)
-        if continues_list:
-            logger.info(
-                "%s page %d continues the unfulfilled list; reading it again",
-                name,
-                page_number,
-            )
-            try:
-                page = extract_page(client, image_path, continues_unfulfilled=True)
-            except ExtractionError as error:
-                # The first reading is still there to fall back on.
-                logger.warning("%s page %d: reading it again failed (%s)", name, page_number, error)
-            if _looks_like_unfulfilled_rows(page):
-                # Still read as items. The code knows what they are, so it moves them.
-                moved = _lines_to_unfulfilled(page.lines, lines)
-                logger.warning(
-                    "%s page %d: moved %d of %d line(s) to unfulfilled by the code "
-                    "(no reason available; lines without a UPC are dropped)",
-                    name,
-                    page_number,
-                    len(moved),
-                    len(page.lines),
-                )
-                page = page.model_copy(
-                    update={"lines": [], "unfulfilled": [*page.unfulfilled, *moved]}
-                )
-        # Stays True through a continuation page even if nothing was read from it,
-        # so a further page of the list is still recognised.
-        in_unfulfilled = bool(page.unfulfilled) or continues_list
+        page = extract_page(client, image_path, notes)
 
         # A row split across two pages: its last description line is at the top
         # of this page, either in ``continued_description`` or as a row with no
@@ -338,10 +299,21 @@ def extract_invoice(
                     fragment,
                 )
 
+        # A row with neither a price nor a total is not an item (for example a list of
+        # items that were not supplied, which the prompt tells the AI to ignore).
+        priced = [
+            line for line in page_lines if line.price is not None or line.line_total is not None
+        ]
+        if len(priced) < len(page_lines):
+            logger.warning(
+                "%s page %d: dropped %d row(s) with no price and no total",
+                name,
+                page_number,
+                len(page_lines) - len(priced),
+            )
+        page_lines = priced
+
         lines.extend(ExtractedLine(**line.model_dump(), page=page_number) for line in page_lines)
-        unfulfilled.extend(
-            ExtractedUnfulfilled(**item.model_dump(), page=page_number) for item in page.unfulfilled
-        )
         if page.totals is not None:
             if totals is None:
                 totals = page.totals
@@ -352,13 +324,17 @@ def extract_invoice(
                     page_number,
                 )
                 totals = _merge_totals(totals, page.totals, name, page_number)
-        logger.info(
-            "Extracted %s page %d: %d line(s), %d unfulfilled",
-            name,
-            page_number,
-            len(page_lines),
-            len(page.unfulfilled),
-        )
+        logger.info("Extracted %s page %d: %d line(s)", name, page_number, len(page_lines))
+
+    # A row split across two pages has its size in the joined description, so the
+    # AI left it null when it read the first page. Any other row with no size gets
+    # the same fallback.
+    # A trailing "*" is a mark printed in the description, not part of the size.
+    for line in lines:
+        if line.size is None:
+            line.size = _size_in(line.description)
+        elif line.size.endswith("*"):
+            line.size = line.size.rstrip("*").strip() or None
 
     if totals is None:
         logger.warning("%s: no totals block found on any page", name)
@@ -367,7 +343,6 @@ def extract_invoice(
         invoice_number=invoice_number,
         extracted_at=datetime.date.today(),
         lines=lines,
-        unfulfilled=unfulfilled,
         totals=totals,
     )
 
@@ -378,45 +353,79 @@ def extract_invoice(
     return output_path
 
 
-def extract_all(
-    client: anthropic.Anthropic, crops_dir: Path, extracted_dir: Path
-) -> dict[Path, Path]:
-    """Extract every invoice folder under ``crops_dir``; a failing invoice is logged and skipped.
+def unique_pages(body_dir: Path, pages: list[str]) -> tuple[list[Path], int]:
+    """The body crops of ``pages`` without exact copies, and how many copies were left out.
 
-    A missing ``crops_dir`` is logged as a warning and extracts nothing.
-
-    Returns a mapping of each invoice folder to its JSON file.
+    Two crops with the same content are the same page twice (a PDF repeated inside
+    another one), so only the first is kept. It is only used on the pages of one
+    invoice: identical pages of two different invoices are both real.
     """
-    crops_dir = Path(crops_dir)
-    if not crops_dir.is_dir():
-        logger.warning("Input folder does not exist: %s", crops_dir)
-        return {}
+    seen: set[str] = set()
+    kept: list[Path] = []
+    for page in pages:
+        path = Path(body_dir) / page
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            kept.append(path)
+    return kept, len(pages) - len(kept)
 
-    invoice_dirs = sorted(p for p in crops_dir.iterdir() if p.is_dir())
-    if not invoice_dirs:
-        logger.warning("No crop folders found in %s", crops_dir)
 
-    results: dict[Path, Path] = {}
-    for invoice_dir in invoice_dirs:
+def _file_name(invoice_number: str) -> str:
+    """A safe file name for an invoice number, which can hold characters such as '/' or '.'."""
+    return re.sub(r"[^\w-]+", "_", invoice_number).strip("_") or "invoice"
+
+
+def extract_vendor(
+    client: anthropic.Anthropic,
+    groups_path: Path,
+    body_dir: Path,
+    extracted_dir: Path,
+    notes: str | None = None,
+) -> dict[str, Path]:
+    """Extract every invoice listed in a vendor's groups file; a failing one is logged and skipped.
+
+    ``groups_path`` is the file written by ``group.py`` and ``body_dir`` the vendor's folder in
+    ``body_crops``. ``notes`` is the vendor's text for the prompt. The pages in the review list
+    are never extracted. Returns a mapping of each invoice number to its JSON file.
+    """
+    groups = InvoiceGroups.model_validate_json(Path(groups_path).read_text(encoding="utf-8"))
+    if groups.review:
+        logger.warning(
+            "%d page(s) are in review and will not be extracted: %s",
+            len(groups.review),
+            ", ".join(groups.review),
+        )
+
+    results: dict[str, Path] = {}
+    names: dict[str, str] = {}
+    for number, pages in groups.groups.items():
+        name = _file_name(number)
+        if name in names:
+            logger.error("Skipping %s: its file name clashes with invoice %s", number, names[name])
+            continue
+        names[name] = number
         try:
-            # Until pages are grouped by invoice number, one folder (one PDF) is one invoice.
-            results[invoice_dir] = extract_invoice(
-                client,
-                sorted(invoice_dir.glob("page_*.png")),
-                invoice_number_from_name(invoice_dir.name),
-                extracted_dir,
-                invoice_dir.name,
+            page_images, repeated = unique_pages(body_dir, pages)
+        except OSError:
+            logger.exception("Skipping %s: could not read its pages", number)
+            continue
+        if repeated:
+            logger.info("%s: left out %d repeated page(s)", number, repeated)
+        try:
+            results[number] = extract_invoice(
+                client, page_images, number, extracted_dir, name, notes
             )
         except ExtractionError:
-            logger.exception("Skipping %s", invoice_dir.name)
+            logger.exception("Skipping %s", number)
     return results
 
 
 def main() -> None:
-    """Extract every cropped invoice of every known vendor (manual run)."""
+    """Extract every invoice of every known vendor from its groups file (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
-    from invoice_pipeline.vendors import vendor_folders
+    from invoice_pipeline.vendors import load_vendor, vendor_folders
 
     config = load_config()
     config.ensure_dirs()
@@ -424,8 +433,22 @@ def main() -> None:
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
     for vendor_dir in vendor_folders(config.body_crops_dir, config.vendors_dir):
-        extracted_dir = config.extracted_dir / vendor_dir.name
-        extracted += len(extract_all(client, vendor_dir, extracted_dir))
+        groups_path = config.groups_dir / f"{vendor_dir.name}.json"
+        if not groups_path.is_file():
+            logger.error("No groups file for %s: run group.py first", vendor_dir.name)
+            continue
+        try:
+            extracted += len(
+                extract_vendor(
+                    client,
+                    groups_path,
+                    vendor_dir,
+                    config.extracted_dir / vendor_dir.name,
+                    load_vendor(config.vendors_dir, vendor_dir.name).notes,
+                )
+            )
+        except (OSError, pydantic.ValidationError):
+            logger.exception("Skipping %s: the groups file is unusable", vendor_dir.name)
     logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
 
 

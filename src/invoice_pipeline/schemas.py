@@ -60,58 +60,85 @@ class InvoiceGroups(BaseModel):
 
 
 class InvoiceLine(BaseModel):
-    """One row of the item table, as read from the page image."""
+    """One row of the item table, as read from the page image.
 
-    description: str = Field(
+    Fields are described by what a column means, not by the header of one vendor.
+    """
+
+    item_code: str | None = Field(
         description=(
-            "Text of the 'Description' column only, with its lines joined by a single space. "
-            "Never include the 'Brand' column, and do not complete text that is cut off at the "
-            "edge of the cell."
+            "The vendor's own code for the item (a column such as 'Code', 'Item #' or "
+            "'Item No'), as text. It has letters or fewer than 10 digits; a barcode is the "
+            "upc, never this. Null if the invoice has none."
         )
     )
     upc: str | None = Field(
         description=(
-            "Value of the 'UPC / CUP' column (or a PLU code), as text so leading zeros are kept. "
-            "Do not use the 'Code' column. Null if the cell is empty."
+            "The barcode: only digits, at least 10 of them (a column such as 'UPC', 'CUP' or "
+            "'Product Number'), as text so leading zeros are kept. Null if the cell is empty, "
+            "reads 'N/A' or the invoice has no barcode."
         )
     )
-    qty_ordered: int | None = Field(
-        description="'Qty Ord.' column, the quantity ordered. Null if not visible."
-    )
-    qty_shipped: int | None = Field(
+    description: str = Field(
         description=(
-            "'Shipped' column only, the quantity shipped now. Never the 'B/O' (back order) "
-            "column next to it: a row with Shipped 0 and B/O 1 has qty_shipped 0. "
+            "The item description, with its lines joined by a single space. Do not complete "
+            "text that is cut off at the edge of the cell, and do not add other columns to it."
+        )
+    )
+    size: str | None = Field(
+        description=(
+            "The pack or size of the item (for example '6/1.75L' or '12/170G'). Take it from "
+            "its own column; if it is split over two columns, a count and a size, write "
+            "count/size. If there is no such column, take it from the description. Null if it "
+            "is printed nowhere."
+        )
+    )
+    quantity: int | None = Field(
+        description=(
+            "The quantity that makes quantity x price = line_total, usually the shipped one. "
+            "A row that shipped 0 has quantity 0. A single quantity column is this one. "
             "Null if not visible."
         )
     )
+    qty_ordered: int | None = Field(
+        description="The quantity ordered, only if the invoice has a column for it. Otherwise null."
+    )
+    qty_backordered: int | None = Field(
+        description=(
+            "The quantity ordered that was NOT shipped and will come later (a column such as "
+            "'B/O' or 'A Venir'). Null if the invoice has no such column or it is empty."
+        )
+    )
+    list_price: float | None = Field(
+        description=(
+            "The price before any discount, only when the invoice prints it next to a "
+            "different price. Null otherwise."
+        )
+    )
     price: float | None = Field(
-        description="'Price' column, before any discount. Null if not visible."
+        description=(
+            "The price actually paid, after any discount, for one selling unit (usually a "
+            "case): quantity x price = line_total. Decide the column by that arithmetic, not "
+            "by its header. Null if not visible."
+        )
     )
-    net_price: float | None = Field(
-        description="'Net Price' column, the price after the discount. Null if not visible."
-    )
-    discount_pct: float | None = Field(
-        description="'Disc %' column as a percentage (20 means 20%). Null if the cell is empty."
+    price_per: str | None = Field(
+        description=(
+            "The unit that price refers to, as the invoice prints it (for example 'CS' or "
+            "'ea'). Null if the invoice prints none."
+        )
     )
     unit_price: float | None = Field(
-        description="'Unit Price' column, the price per single unit. Null if not visible."
+        description=(
+            "The price actually paid for one piece inside the case, only when the invoice "
+            "prints it in addition to price. Null otherwise."
+        )
     )
-    total: float | None = Field(
-        description="'Extended Price' column. A value written '.00' is 0. Null if not visible."
-    )
-
-
-class UnfulfilledItem(BaseModel):
-    """One row of the 'Unfulfilled supply' list: a product that could not be shipped."""
-
-    upc: str = Field(description="First column of the row, as text so leading zeros are kept.")
-    description: str = Field(
-        description="The item description, joining its text columns with a single space."
-    )
-    quantity: int | None = Field(description="The 'Quantity' column. Null if not visible.")
-    reason: str | None = Field(
-        description="The 'Reason' column, copied exactly as printed. Null if not visible."
+    line_total: float | None = Field(
+        description=(
+            "The amount of the whole row, usually the rightmost number. A value written "
+            "'.00' is 0. Null if not visible."
+        )
     )
 
 
@@ -127,13 +154,13 @@ class InvoiceTotals(BaseModel):
 
     subtotal: float | None = Field(
         description=(
-            "The amount next to the label 'SUBTOTAL'. Null if that label is not on this page "
+            "The amount next to the subtotal label. Null if that label is not on this page "
             "(some invoices have no subtotal)."
         )
     )
     total: float | None = Field(
         description=(
-            "The amount next to the label '** TOTAL **'. Null if that label is not on this "
+            "The amount next to the final total label. Null if that label is not on this "
             "page. Never a fee, a tax or the last amount shown."
         )
     )
@@ -157,13 +184,10 @@ class PageExtraction(BaseModel):
             "page's last row (a line with no quantities, UPC or prices). Null if there is none."
         )
     )
-    unfulfilled: list[UnfulfilledItem] = Field(
-        description="Rows of the 'Unfulfilled supply' list on this page. Empty if there are none."
-    )
     totals: InvoiceTotals | None = Field(
         description=(
             "The invoice totals block as far as this page shows it. Not null as soon as any of "
-            "SUBTOTAL, a fee or tax line or '** TOTAL **' is visible, even if it is the only "
+            "the subtotal, a fee or tax line or the final total is visible, even if it is the only "
             "one. Null only if none of them is on this page."
         )
     )
@@ -171,12 +195,6 @@ class PageExtraction(BaseModel):
 
 class ExtractedLine(InvoiceLine):
     """A line in the final JSON: the AI's fields plus the page, set by the code."""
-
-    page: int
-
-
-class ExtractedUnfulfilled(UnfulfilledItem):
-    """An unfulfilled item in the final JSON: the AI's fields plus the page."""
 
     page: int
 
@@ -189,6 +207,5 @@ class InvoiceExtraction(BaseModel):
     # The day the invoice was processed, not the date printed on the invoice.
     extracted_at: datetime.date
     lines: list[ExtractedLine]
-    unfulfilled: list[ExtractedUnfulfilled]
     # None when no page showed a totals block.
     totals: InvoiceTotals | None
