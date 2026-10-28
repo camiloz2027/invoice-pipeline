@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import datetime
+import hashlib
 import logging
 import re
 from pathlib import Path
@@ -15,6 +16,7 @@ from invoice_pipeline.schemas import (
     ExtractedLine,
     ExtractedUnfulfilled,
     InvoiceExtraction,
+    InvoiceGroups,
     InvoiceLine,
     InvoiceTotals,
     PageExtraction,
@@ -180,16 +182,6 @@ def _merge_totals(
         if charge not in charges:
             charges.append(charge)
     return InvoiceTotals(charges=charges, **merged)
-
-
-def invoice_number_from_name(name: str) -> str | None:
-    """Take the invoice number from a file or folder name ("Invoice_1234567" -> "1234567").
-
-    Uses the longest run of digits, so a short number such as the "2" in "copy 2"
-    does not win over the real one. Returns None when the name has no digits.
-    """
-    numbers = re.findall(r"\d+", name)
-    return max(numbers, key=len) if numbers else None
 
 
 def extract_page(
@@ -378,42 +370,70 @@ def extract_invoice(
     return output_path
 
 
-def extract_all(
-    client: anthropic.Anthropic, crops_dir: Path, extracted_dir: Path
-) -> dict[Path, Path]:
-    """Extract every invoice folder under ``crops_dir``; a failing invoice is logged and skipped.
+def unique_pages(body_dir: Path, pages: list[str]) -> tuple[list[Path], int]:
+    """The body crops of ``pages`` without exact copies, and how many copies were left out.
 
-    A missing ``crops_dir`` is logged as a warning and extracts nothing.
-
-    Returns a mapping of each invoice folder to its JSON file.
+    Two crops with the same content are the same page twice (a PDF repeated inside
+    another one), so only the first is kept. It is only used on the pages of one
+    invoice: identical pages of two different invoices are both real.
     """
-    crops_dir = Path(crops_dir)
-    if not crops_dir.is_dir():
-        logger.warning("Input folder does not exist: %s", crops_dir)
-        return {}
+    seen: set[str] = set()
+    kept: list[Path] = []
+    for page in pages:
+        path = Path(body_dir) / page
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            kept.append(path)
+    return kept, len(pages) - len(kept)
 
-    invoice_dirs = sorted(p for p in crops_dir.iterdir() if p.is_dir())
-    if not invoice_dirs:
-        logger.warning("No crop folders found in %s", crops_dir)
 
-    results: dict[Path, Path] = {}
-    for invoice_dir in invoice_dirs:
+def _file_name(invoice_number: str) -> str:
+    """A safe file name for an invoice number, which can hold characters such as '/' or '.'."""
+    return re.sub(r"[^\w-]+", "_", invoice_number).strip("_") or "invoice"
+
+
+def extract_vendor(
+    client: anthropic.Anthropic, groups_path: Path, body_dir: Path, extracted_dir: Path
+) -> dict[str, Path]:
+    """Extract every invoice listed in a vendor's groups file; a failing one is logged and skipped.
+
+    ``groups_path`` is the file written by ``group.py`` and ``body_dir`` the vendor's folder in
+    ``body_crops``. The pages in the review list are never extracted. Returns a mapping of each
+    invoice number to its JSON file.
+    """
+    groups = InvoiceGroups.model_validate_json(Path(groups_path).read_text(encoding="utf-8"))
+    if groups.review:
+        logger.warning(
+            "%d page(s) are in review and will not be extracted: %s",
+            len(groups.review),
+            ", ".join(groups.review),
+        )
+
+    results: dict[str, Path] = {}
+    names: dict[str, str] = {}
+    for number, pages in groups.groups.items():
+        name = _file_name(number)
+        if name in names:
+            logger.error("Skipping %s: its file name clashes with invoice %s", number, names[name])
+            continue
+        names[name] = number
         try:
-            # Until pages are grouped by invoice number, one folder (one PDF) is one invoice.
-            results[invoice_dir] = extract_invoice(
-                client,
-                sorted(invoice_dir.glob("page_*.png")),
-                invoice_number_from_name(invoice_dir.name),
-                extracted_dir,
-                invoice_dir.name,
-            )
+            page_images, repeated = unique_pages(body_dir, pages)
+        except OSError:
+            logger.exception("Skipping %s: could not read its pages", number)
+            continue
+        if repeated:
+            logger.info("%s: left out %d repeated page(s)", number, repeated)
+        try:
+            results[number] = extract_invoice(client, page_images, number, extracted_dir, name)
         except ExtractionError:
-            logger.exception("Skipping %s", invoice_dir.name)
+            logger.exception("Skipping %s", number)
     return results
 
 
 def main() -> None:
-    """Extract every cropped invoice of every known vendor (manual run)."""
+    """Extract every invoice of every known vendor from its groups file (manual run)."""
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
     from invoice_pipeline.vendors import vendor_folders
@@ -424,8 +444,18 @@ def main() -> None:
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
     for vendor_dir in vendor_folders(config.body_crops_dir, config.vendors_dir):
-        extracted_dir = config.extracted_dir / vendor_dir.name
-        extracted += len(extract_all(client, vendor_dir, extracted_dir))
+        groups_path = config.groups_dir / f"{vendor_dir.name}.json"
+        if not groups_path.is_file():
+            logger.error("No groups file for %s: run group.py first", vendor_dir.name)
+            continue
+        try:
+            extracted += len(
+                extract_vendor(
+                    client, groups_path, vendor_dir, config.extracted_dir / vendor_dir.name
+                )
+            )
+        except (OSError, pydantic.ValidationError):
+            logger.exception("Skipping %s: the groups file is unusable", vendor_dir.name)
     logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
 
 
