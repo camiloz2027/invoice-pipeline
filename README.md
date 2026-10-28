@@ -12,7 +12,7 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 | 1 | PDF → one PNG per page, rotated pages turned upright | `pdf_to_images.py`, `orientation.py` | Done |
 | 2 | Crop each page to the region with the invoice data | `crop.py` | Done |
 | 3 | AI extraction (vision) | `extract.py` | Done |
-| 4 | Validation | `validate.py` | Done |
+| 4 | Validation | `validate.py` | To update for the new schema |
 | 5 | SQLite storage | `db.py` | Planned |
 | 6 | Price analytics and notebook | `analytics.py` | Planned |
 | 7 | CLI, demo, weekly run script, CI | `cli.py`, `demo.py` | Planned |
@@ -20,8 +20,8 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 Each vendor has its own folder in `data/raw/` and its own settings file,
 `data/vendors/<same name>.toml`, which holds the crop regions (see
 [vendors.py](src/invoice_pipeline/vendors.py)). A folder with no settings file is skipped,
-so a page is never cropped with another vendor's region. Settings stay on your machine:
-`data/` is ignored by Git.
+so a page is never cropped with another vendor's region. The file can also hold `notes` for the
+AI (see below). Settings stay on your machine: `data/` is ignored by Git.
 
 The invoice date is not read from the invoice. Each extraction result carries an
 `extracted_at` date, the day it was processed, which is set by the code and not by the AI.
@@ -103,6 +103,20 @@ body_box = [0.025, 0.35, 0.9, 0.9]
 id_box = [0.59, 0.15, 0.72, 0.17]
 ```
 
+### Vendor notes
+
+A settings file may also hold `notes`, a text written by hand that is added to the extraction
+prompt for that vendor only. Use it when the AI keeps mixing up a vendor's columns, for example to
+say which printed column is which field. Do not name the vendor in it: vendor names are never
+sent to the AI. `pick_boxes.py` keeps the notes when it saves a zone.
+
+```toml
+notes = """
+The Price column is the price before the discount and the Net Price column is the price after it.
+price is the Net Price column. The size is at the end of the description.
+"""
+```
+
 Logs go to the console and to `data/logs/pipeline.log`.
 
 ## Grouping pages by invoice number
@@ -139,53 +153,65 @@ made-up values:
   "extracted_at": "2026-01-15",
   "lines": [
     {
-      "description": "EXAMPLE TEA 6/18BAGS",
+      "item_code": "10001",
       "upc": "012345678905",
-      "qty_ordered": 1,
-      "qty_shipped": 1,
-      "price": 40.0,
-      "net_price": 32.0,
-      "discount_pct": 20.0,
+      "description": "EXAMPLE TEA 6/18BAGS",
+      "size": "6/18BAGS",
+      "quantity": 5,
+      "qty_ordered": 5,
+      "qty_backordered": null,
+      "list_price": 40.0,
+      "price": 32.0,
+      "price_per": "CS",
       "unit_price": 5.33,
-      "total": 32.0,
+      "line_total": 160.0,
       "page": 1
     }
   ],
-  "unfulfilled": [
-    {
-      "upc": "012345678912",
-      "description": "EXAMPLE COOKIES 12/200G",
-      "quantity": 1,
-      "reason": "Facility Out of Stock",
-      "page": 9
-    }
-  ],
   "totals": {
-    "subtotal": 32.0,
-    "total": 33.6,
-    "charges": [{ "name": "GST 5.00 %", "amount": 1.6 }]
+    "subtotal": 160.0,
+    "total": 168.0,
+    "charges": [{ "name": "GST 5.00 %", "amount": 8.0 }]
   }
 }
 ```
 
-- `lines` are the rows of the item table, `unfulfilled` is the "Unfulfilled supply" list
-  (products that could not be shipped, with the reason; empty when the invoice has none) and
-  `totals` holds the subtotal, the total and the fee or tax lines between them.
-- Values are copied as printed. An empty or unreadable cell is `null`, and `upc` is text so
-  leading zeros are kept.
+- `lines` are the rows of the item table and `totals` holds the subtotal, the total and the
+  fee or tax lines between them.
+- The fields describe what a column means, not the header of one vendor, so the same shape
+  fits every vendor. `price` is always the price actually paid, after any discount, for one
+  selling unit (usually a case), so `quantity` x `price` = `line_total`. `quantity` is the
+  quantity that makes that true (usually the shipped one); `qty_ordered` and
+  `qty_backordered` are filled only when the invoice has those columns. `list_price` is the
+  price before the discount and `unit_price` the price of one piece inside the case, both only
+  when the invoice prints them. `price_per` is the unit `price` refers to, as printed (`CS`,
+  `ea`).
+- `upc` is a barcode (digits only, at least 10) and `item_code` is the vendor's own code; both
+  are text so leading zeros are kept. `size` is always filled, from its own column or from the
+  description. If the AI leaves it empty, the code looks for it in the description.
+- Values are copied as printed. An empty or unreadable cell is `null`, and a field the vendor
+  does not print is `null`.
+- Not extracted: lists of items that were not supplied, fee or deposit rows inside the item
+  table, brand, tax and any column not listed above. A row with neither a price nor a total is
+  dropped with a warning.
+- A vendor's `notes` (see above) are added to the prompt when its invoices are extracted.
 - The code, not the AI, sets the invoice number (the one read by `group.py`), `extracted_at`
-  and `page` (the position of the page within its invoice). It also joins descriptions that run over two pages and
-  reads again a page that continues the "Unfulfilled supply" list.
+  and `page` (the position of the page within its invoice). It also joins descriptions that run
+  over two pages.
 - If any page of an invoice fails, no JSON is saved for that invoice.
 - The totals block can be split over two pages (the subtotal at the bottom of one, the fees and
   the total at the top of the next), and a page can show only part of it, even just the
-  `** TOTAL **` line. The AI fills only what the page shows and leaves the rest `null`.
+  final total line. The AI fills only what the page shows and leaves the rest `null`.
   The code joins the blocks: each amount comes from the first
   block that has it, and the fees are put together in order. If two blocks disagree on an
   amount, the first is kept and a warning is logged.
 - In a test with a 10-page invoice it took about a minute and cost about one US cent.
 
 ## Validation
+
+> **Not updated yet:** `validate.py` still uses the field names of the previous schema
+> (`net_price`, `total`, `unfulfilled`...) and fails on the current extraction output. It will be
+> adapted in a following change. The rules below describe the previous schema.
 
 The AI can misread a digit and still return a well-formed JSON, so `validate.py` checks that
 the numbers agree with each other, using the arithmetic the invoice itself provides. It only
