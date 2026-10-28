@@ -14,6 +14,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `group.py`: reads the invoice number of every page from the `id_crops` with Claude Sonnet 5.5 and groups the pages by it in `data/interim/groups/<vendor>.json`. The AI only sees neutral labels, never file or vendor names; unreadable or odd numbers go to a review list.
 
 ### Changed
+- **Breaking:** `extract.py` extracts one invoice per invoice number, from the groups file written by `group.py`, instead of one invoice per PDF. Run `group.py` first. Pages that are exact copies of another page of the same invoice are left out, and pages in the review list are not extracted.
 - The body crops folder `data/interim/crops` is now `data/interim/body_crops` (`Config.crops_dir` is now `body_crops_dir`).
 - **Breaking:** PDFs must now live in `data/raw/<vendor>/`, and every stage reads and writes `data/interim/<stage>/<vendor>/`.
 - `crop.py` no longer has a default crop box; it must be given one.

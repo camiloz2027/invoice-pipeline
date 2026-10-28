@@ -68,7 +68,7 @@ active):
 python src/invoice_pipeline/pdf_to_images.py   # data/raw -> data/interim/images
 python src/invoice_pipeline/crop.py            # data/interim/images -> data/interim/body_crops and id_crops
 python src/invoice_pipeline/group.py           # data/interim/id_crops -> data/interim/groups (calls the API)
-python src/invoice_pipeline/extract.py         # data/interim/body_crops -> data/interim/extracted
+python src/invoice_pipeline/extract.py         # data/interim/body_crops + groups -> data/interim/extracted
 python src/invoice_pipeline/validate.py        # checks data/interim/extracted, changes nothing
 ```
 
@@ -125,7 +125,10 @@ Running it again calls the API again and overwrites the file.
 
 ## Extraction output
 
-`extract.py` sends each cropped page to Claude Haiku 5.5 (`claude-haiku-5-5`) with a prompt
+`extract.py` reads the groups file written by `group.py` and extracts one invoice per invoice
+number, even when its pages come from different PDFs. Inside an invoice, a page that is an
+exact copy of another one (the same content) is left out. Pages in the review list are never
+extracted. It sends each cropped page to Claude Haiku 5.5 (`claude-haiku-5-5`) with a prompt
 and a response schema ([schemas.py](src/invoice_pipeline/schemas.py)), so the reply always has
 the same shape. It saves one JSON per invoice in `data/interim/extracted/`. An example with
 made-up values:
@@ -170,8 +173,8 @@ made-up values:
   `totals` holds the subtotal, the total and the fee or tax lines between them.
 - Values are copied as printed. An empty or unreadable cell is `null`, and `upc` is text so
   leading zeros are kept.
-- The code, not the AI, sets the invoice number (the longest run of digits in the PDF file
-  name), `extracted_at` and `page`. It also joins descriptions that run over two pages and
+- The code, not the AI, sets the invoice number (the one read by `group.py`), `extracted_at`
+  and `page` (the position of the page within its invoice). It also joins descriptions that run over two pages and
   reads again a page that continues the "Unfulfilled supply" list.
 - If any page of an invoice fails, no JSON is saved for that invoice.
 - The totals block can be split over two pages (the subtotal at the bottom of one, the fees and
