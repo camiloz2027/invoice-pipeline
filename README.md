@@ -123,7 +123,9 @@ price is the Net Price column. The size is at the end of the description.
 """
 ```
 
-Logs go to the console and to `data/logs/pipeline.log`.
+Logs go to the console and to `data/logs/pipeline.log`. Each line shows the time, the level and the
+file that wrote it, so you can tell which stage is running, for example
+`2026-10-28 22:24:39,069 | INFO     | crop.py           | Done: 16 invoice(s) cropped.`
 
 ## Grouping pages by invoice number
 

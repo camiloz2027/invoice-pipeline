@@ -19,6 +19,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `size` is always filled: when the AI leaves it empty, the code takes it from the description (for example a description split over two pages), and a trailing `*` is removed.
 
 ### Changed
+- Log lines show the name of the file that wrote them (for example `extract.py`) instead of the package path, so it is easy to see which stage is running.
 - **Breaking:** the extraction schema and prompt are now vendor-neutral. A line has `item_code`, `upc`, `description`, `size`, `quantity`, `qty_ordered`, `qty_backordered`, `list_price`, `price`, `price_per`, `unit_price` and `line_total`. `price` is the price actually paid after any discount, so `quantity` x `price` = `line_total`. `validate.py` still uses the old names and has to be updated.
 - The extraction prompt has two invented example rows and rules for the barcode (`upc`: digits only, at least 10), the quantity and the discounted price. The model effort is now `high`, the token limit 16000 and the tokens used by each page are logged.
 - **Breaking:** `extract.py` extracts one invoice per invoice number, from the groups file written by `group.py`, instead of one invoice per PDF. Run `group.py` first. Pages that are exact copies of another page of the same invoice are left out, and pages in the review list are not extracted.

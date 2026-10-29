@@ -9,7 +9,7 @@ from logging.handlers import RotatingFileHandler
 from invoice_pipeline.config import Config
 
 LOGGER_NAME = "invoice_pipeline"
-LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+LOG_FORMAT = "%(asctime)s | %(levelname)-8s | %(filename)-17s | %(message)s"
 MAX_LOG_BYTES = 2_000_000
 BACKUP_COUNT = 3
 
