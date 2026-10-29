@@ -192,8 +192,9 @@ made-up values:
   quantity that makes that true (usually the shipped one); `qty_ordered` and
   `qty_backordered` are filled only when the invoice has those columns. `list_price` is the
   price before the discount and `unit_price` the price of one piece inside the case, both only
-  when the invoice prints them. `price_per` is the unit `price` refers to, as printed (`CS`,
-  `ea`).
+  when the invoice prints them. `price_per` is the unit `price` refers to: the
+  ways of writing "case" (`CASE`, `PER CASE`, `CS`, `MC`) are all saved as `CS`, and any other
+  unit (`ea`) as printed.
 - `upc` is a barcode (digits only, at least 10) and `item_code` is the vendor's own code; both
   are text so leading zeros are kept. `size` is always filled, from its own column or from the
   description. If the AI leaves it empty, the code looks for it in the description.
