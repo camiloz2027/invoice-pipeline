@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 MODEL = "claude-haiku-5-5"
 # A page is a few thousand tokens of JSON, and this model's reasoning counts toward the limit.
 MAX_TOKENS = 16000
-# Reading a table needs little reasoning, but strike-throughs and faint print do.
-EFFORT = "medium"
+# Strike-throughs and faint print need careful reading, so the effort is high.
+EFFORT = "high"
 
 # What each field is lives in the field descriptions of ``schemas.py`` (they
 # travel inside the response schema). The prompt holds how to behave and the
@@ -422,17 +422,32 @@ def extract_vendor(
 
 
 def main() -> None:
-    """Extract every invoice of every known vendor from its groups file (manual run)."""
+    """Extract the invoices of every known vendor, or of one, from its groups file (manual run)."""
+    import argparse
+
     from invoice_pipeline.config import load_config
     from invoice_pipeline.logging_setup import setup_logging
     from invoice_pipeline.vendors import load_vendor, vendor_folders
 
+    parser = argparse.ArgumentParser(
+        description="Extract the invoices of the vendors' groups files."
+    )
+    parser.add_argument("vendor", nargs="?", help="only this vendor folder (default: all)")
+    args = parser.parse_args()
+
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
+    vendor_dirs = vendor_folders(config.body_crops_dir, config.vendors_dir)
+    if args.vendor:
+        vendor_dirs = [d for d in vendor_dirs if d.name == args.vendor]
+        if not vendor_dirs:
+            parser.error(
+                f"No usable vendor folder named {args.vendor!r} in {config.body_crops_dir}"
+            )
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
-    for vendor_dir in vendor_folders(config.body_crops_dir, config.vendors_dir):
+    for vendor_dir in vendor_dirs:
         groups_path = config.groups_dir / f"{vendor_dir.name}.json"
         if not groups_path.is_file():
             logger.error("No groups file for %s: run group.py first", vendor_dir.name)

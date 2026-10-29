@@ -72,8 +72,14 @@ python src/invoice_pipeline/extract.py         # data/interim/body_crops + group
 python src/invoice_pipeline/validate.py        # checks data/interim/extracted, changes nothing
 ```
 
+`pdf_to_images.py` turns rotated pages upright and then checks each page by reading it in all four
+orientations. If another orientation reads clearly better, the page is turned and a warning is
+logged. If none does (for example a nearly blank page), the page is listed in the log and the command
+ends with an error, so check that page by hand. It takes a few seconds per page.
+
 Running a stage again overwrites its previous output, so you can tune and repeat it freely.
 The exception to "freely" is `extract.py`, which calls the API and costs a little every time.
+To pay only for one vendor, run `python src/invoice_pipeline/extract.py <vendor>`.
 
 ### Choosing a vendor's crop regions
 

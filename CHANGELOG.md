@@ -11,14 +11,16 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - `crop.py` also crops each vendor's `id_box` (the invoice number) into `data/interim/id_crops/`, with the same relative path as the body crop.
 
+- Orientation check (`orientation.py`): after turning a page upright, `pdf_to_images.py` reads it in all four orientations and keeps the one that reads clearly better. A page where none does is reported in the log and the command ends with an error, so a sideways page cannot go on to the AI unnoticed.
 - `group.py`: reads the invoice number of every page from the `id_crops` with Claude Sonnet 5.5 and groups the pages by it in `data/interim/groups/<vendor>.json`. The AI only sees neutral labels, never file or vendor names; unreadable or odd numbers go to a review list.
 
 - Per-vendor `notes` in the settings file: free text added to the extraction prompt for that vendor only. `vendors.py` accepts the key (`Vendor.notes`, `load_notes`) and `save_box` keeps it.
+- `extract.py` accepts an optional vendor name (`extract.py <vendor>`) to extract only that vendor, so a new vendor can be tried without paying again for the others.
 - `size` is always filled: when the AI leaves it empty, the code takes it from the description (for example a description split over two pages), and a trailing `*` is removed.
 
 ### Changed
 - **Breaking:** the extraction schema and prompt are now vendor-neutral. A line has `item_code`, `upc`, `description`, `size`, `quantity`, `qty_ordered`, `qty_backordered`, `list_price`, `price`, `price_per`, `unit_price` and `line_total`. `price` is the price actually paid after any discount, so `quantity` x `price` = `line_total`. `validate.py` still uses the old names and has to be updated.
-- The extraction prompt has two invented example rows and rules for the barcode (`upc`: digits only, at least 10), the quantity and the discounted price. The model effort is now `medium`, the token limit 16000 and the tokens used by each page are logged.
+- The extraction prompt has two invented example rows and rules for the barcode (`upc`: digits only, at least 10), the quantity and the discounted price. The model effort is now `high`, the token limit 16000 and the tokens used by each page are logged.
 - **Breaking:** `extract.py` extracts one invoice per invoice number, from the groups file written by `group.py`, instead of one invoice per PDF. Run `group.py` first. Pages that are exact copies of another page of the same invoice are left out, and pages in the review list are not extracted.
 - The body crops folder `data/interim/crops` is now `data/interim/body_crops` (`Config.crops_dir` is now `body_crops_dir`).
 - **Breaking:** PDFs must now live in `data/raw/<vendor>/`, and every stage reads and writes `data/interim/<stage>/<vendor>/`.
@@ -30,6 +32,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - `grid_overlay.py` and the `data/interim/grids/` folder: `pick_boxes.py` replaces them for choosing crop regions.
 
 ### Fixed
+- Page orientation is detected at two sizes and the more confident answer is kept. Pages with dense small text, such as a table of many columns, were shrunk too much, so Tesseract answered with little confidence or the wrong way and the page was left sideways or turned the wrong way.
 - Extraction reads a totals block that a page shows only in part, such as a page with just the `** TOTAL **` line. Before, the AI returned no totals for those pages, and in one case copied a fee into the total.
 - Extraction no longer reads the `B/O` (back order) column as the shipped quantity. The prompt and the field descriptions now explain the three quantity columns; before, rows that shipped nothing could come out as shipped, which validation caught.
 
