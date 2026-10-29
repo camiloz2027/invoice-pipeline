@@ -21,6 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tests for `validate.py` (`tests/test_validate.py`), with invented invoices built from the real schema.
 
 ### Changed
+- `price_per` is written the same way for every vendor: `CASE`, `PER CASE`, `CS` and `MC` all become `CS`, so a query by case does not miss lines. Any other unit (such as `ea`) is kept as printed, and an empty one stays `null`. `extract.py` does this after reading the pages, not the AI.
 - **Breaking:** `validate.py` works with the current schema and now checks each line only: E2 (quantity present, and price and total when there is a quantity), E3 (`quantity` x `price` = `line_total`, one cent of tolerance), E6 (no negative amounts, `quantity` not above `qty_ordered`) and E7 (the invoice has at least one line). The checks of the totals block, the subtotal, the UPC, the unfulfilled lists and the other warnings were removed for now.
 - Log lines show the name of the file that wrote them (for example `extract.py`) instead of the package path, so it is easy to see which stage is running.
 - **Breaking:** the extraction schema and prompt are now vendor-neutral. A line has `item_code`, `upc`, `description`, `size`, `quantity`, `qty_ordered`, `qty_backordered`, `list_price`, `price`, `price_per`, `unit_price` and `line_total`. `price` is the price actually paid after any discount, so `quantity` x `price` = `line_total`.

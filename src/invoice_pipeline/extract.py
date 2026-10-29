@@ -128,6 +128,10 @@ NUMBER_FIELDS = (
 SIZE_PATTERN = re.compile(r"\d+(?:\.\d+)?(?:\s?[/xX]\s?\d+(?:\.\d+)?)+\s?[A-Za-z]+")
 
 
+# The ways the invoices print "sold by the case", all written as CS.
+PRICE_PER_ALIASES = {"CASE": "CS", "PER CASE": "CS", "CS": "CS", "MC": "CS"}
+
+
 class ExtractionError(Exception):
     """Raised when a page or an invoice cannot be extracted."""
 
@@ -136,6 +140,15 @@ def _size_in(description: str) -> str | None:
     """The pack size written at the end of a description, such as 12/325G, or None."""
     matches = SIZE_PATTERN.findall(description)
     return matches[-1].replace(" ", "") if matches else None
+
+
+def _standard_price_per(value: str | None) -> str | None:
+    """The unit a price refers to, with the ways of writing "case" turned into CS.
+
+    Any other unit (such as "ea") is kept as printed, only with its spaces tidied.
+    """
+    text = " ".join((value or "").split())
+    return PRICE_PER_ALIASES.get(text.upper(), text) or None
 
 
 def _is_empty_row(line: InvoiceLine) -> bool:
@@ -331,6 +344,7 @@ def extract_invoice(
     # the same fallback.
     # A trailing "*" is a mark printed in the description, not part of the size.
     for line in lines:
+        line.price_per = _standard_price_per(line.price_per)
         if line.size is None:
             line.size = _size_in(line.description)
         elif line.size.endswith("*"):
