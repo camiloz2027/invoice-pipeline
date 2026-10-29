@@ -12,7 +12,7 @@ PDF → images → crop → AI extraction (vision) → validation → SQLite →
 | 1 | PDF → one PNG per page, rotated pages turned upright | `pdf_to_images.py`, `orientation.py` | Done |
 | 2 | Crop each page to the region with the invoice data | `crop.py` | Done |
 | 3 | AI extraction (vision) | `extract.py` | Done |
-| 4 | Validation | `validate.py` | To update for the new schema |
+| 4 | Validation (line by line) | `validate.py` | Done |
 | 5 | SQLite storage | `db.py` | Planned |
 | 6 | Price analytics and notebook | `analytics.py` | Planned |
 | 7 | CLI, demo, weekly run script, CI | `cli.py`, `demo.py` | Planned |
@@ -217,40 +217,31 @@ made-up values:
 
 ## Validation
 
-> **Not updated yet:** `validate.py` still uses the field names of the previous schema
-> (`net_price`, `total`, `unfulfilled`...) and fails on the current extraction output. It will be
-> adapted in a following change. The rules below describe the previous schema.
-
 The AI can misread a digit and still return a well-formed JSON, so `validate.py` checks that
-the numbers agree with each other, using the arithmetic the invoice itself provides. It only
-reads the JSON files: it never changes them and makes no API calls. Money is compared as
-`Decimal`, allowing a difference of one cent.
+the numbers of each line agree with each other, using the arithmetic the invoice itself
+provides. It only reads the JSON files: it never changes them and makes no API calls. Money is
+compared as `Decimal`, allowing a difference of one cent.
 
 Every line is checked the same way, including lines that were not shipped, because all of
 them are kept. For the example above:
 
 | Rule | Severity | What it checks | Example |
 |------|----------|----------------|---------|
-| E1 | error | The totals block has a total (the subtotal is optional: short invoices print only a total) | `total` is present |
-| E2 | error | Each line has its shipped quantity; a line that shipped also has `net_price` and `total` | `qty_shipped` is not `null` |
-| E3 | error | Shipped quantity × net price = line total (a line that did not ship must total 0) | 1 × 32.0 = 32.0 |
-| E4 | error | The line totals add up to the printed subtotal, or to the printed total minus the fees and taxes when the invoice prints no subtotal | 32.0 = 32.0 |
-| E5 | error | Subtotal + fees and taxes = printed total (only when a subtotal is printed) | 32.0 + 1.6 = 33.6 |
-| E6 | error | No negative amounts, and never more shipped than ordered | 0 ≤ 1 ≤ 1 |
-| W1 | warning | A line without a UPC | `upc` is not empty |
-| W2 | warning | The same UPC on more than one line (a duplicated page, maybe) | each UPC appears once |
-| W3 | warning | A net price above the list price | 32.0 ≤ 40.0 |
-| I1 | info | Lines not shipped compared with the "Unfulfilled supply" list; shown only, never judged | 0 lines, 1 row |
-| I2 | info | The invoice prints no subtotal; shown only | the example has one |
+| E2 | error | Each line has its `quantity`; a line with a quantity above 0 also has `price` and `line_total` | `quantity` is not `null` |
+| E3 | error | `quantity` × `price` = `line_total` (a line with quantity 0 must total 0) | 5 × 32.0 = 160.0 |
+| E6 | error | No negative amounts, and `quantity` never above `qty_ordered` (only when the invoice has an ordered column) | 0 ≤ 5 ≤ 5 |
+| E7 | error | The invoice has at least one line | 1 line |
 
-- An invoice **fails** when it has at least one error. Warnings and notes do not fail it.
-- All the findings are reported, not only the first one. A single misread value often breaks
-  more than one rule (a wrong subtotal breaks E4 and E5), and the combination points to the
-  cause. The E4 message includes the difference.
-- The unfulfilled list is shown but its detail is not checked: the priority is the data that
-  was billed.
-- Not checked: the description, the discount percentage (the invoice prints it rounded to a
-  whole number) and each fee or tax on its own.
+- An invoice **fails** when it has at least one error.
+- All the findings are reported, not only the first one, each with its line and page.
+- E7 flags an invoice that came out empty so someone looks at it. For example, when every row
+  was a free item with no price, `extract.py` drops them and nothing is left.
+- The rule numbers are kept from the full list of rules designed for the check, so the ones
+  that are not active yet (totals, subtotal, fees) can come back with their own numbers.
+- Not checked yet: the totals block (subtotal + fees = total), the sum of the lines against the
+  subtotal, missing pages, and the description, size and UPC digits. Some vendors print a
+  subtotal that already includes the deposit rows of the table, which are not extracted, so
+  those checks need a rule that allows for it.
 - For now a failed invoice is only reported in the log and in the returned report; nothing is
   moved or corrected. What to do with it comes with the CLI.
 
