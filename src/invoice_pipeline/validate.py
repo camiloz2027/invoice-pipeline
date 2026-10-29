@@ -10,9 +10,11 @@ Rules (``E`` = error, the invoice fails; ``W`` = warning; ``I`` = information):
 * E3 quantity x price = line total (a line with quantity 0 must total 0).
 * E6 no negative amounts, and never more shipped than ordered (only when the invoice has
   an ordered column).
+* E7 the invoice has at least one line (an empty one needs a look, for example when every row
+  was a free item with no price and was dropped).
 
-Nothing is checked about the invoice as a whole yet (totals, subtotal, number of lines,
-missing pages) nor about the description, the size or the UPC.
+Nothing else is checked about the invoice as a whole yet (totals, subtotal, missing pages)
+nor about the description, the size or the UPC.
 """
 
 from __future__ import annotations
@@ -93,6 +95,9 @@ def validate_invoice(invoice: InvoiceExtraction) -> ValidationReport:
 
     def add(severity: Severity, rule: str, message: str, page=None, line=None) -> None:
         report.issues.append(Issue(severity, rule, message, page, line))
+
+    if not invoice.lines:
+        add(Severity.ERROR, "E7", "the invoice has no lines")
 
     for number, line in enumerate(invoice.lines, start=1):
         where = {"page": line.page, "line": number}
