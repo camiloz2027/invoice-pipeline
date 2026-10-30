@@ -114,9 +114,7 @@ def load_vendor(vendors_dir: Path, name: str) -> Vendor:
     """Load the settings of vendor ``name``; fail if there is no usable body_box."""
     path = settings_path(vendors_dir, name)
     if not path.is_file():
-        raise VendorError(
-            f"No settings for vendor {name!r}: expected {path}. Create them with pick_boxes.py."
-        )
+        raise VendorError(f"No settings file {path.name}. Create it with pick_boxes.py.")
     boxes = load_boxes(vendors_dir, name)
     if "body_box" not in boxes:
         raise VendorError(f"{path.name}: body_box is missing. Set it with pick_boxes.py.")
@@ -162,7 +160,7 @@ def vendor_folders(parent: Path, vendors_dir: Path) -> list[Path]:
     """
     parent = Path(parent)
     if not parent.is_dir():
-        logger.warning("Input folder does not exist: %s", parent)
+        logger.warning("Input folder does not exist: %s", parent.name)
         return []
 
     folders = []
@@ -170,7 +168,7 @@ def vendor_folders(parent: Path, vendors_dir: Path) -> list[Path]:
         try:
             load_vendor(vendors_dir, folder.name)
         except VendorError as error:
-            logger.error("Skipping folder %r in %s: %s", folder.name, parent, error)
+            logger.error("Skipping %s: %s", folder.name, error)
         else:
             folders.append(folder)
     return folders

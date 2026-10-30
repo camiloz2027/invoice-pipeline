@@ -38,7 +38,7 @@ def crop_all(images_dir, crops_dir, box):
     results = {}
 
     if not images_dir.is_dir():
-        logger.warning("Input folder does not exist: %s", images_dir)
+        logger.warning("Input folder does not exist: %s", images_dir.name)
         return results
 
     for invoice_dir in sorted(images_dir.iterdir()):
@@ -57,7 +57,7 @@ def crop_all(images_dir, crops_dir, box):
             try:
                 crop_image(page_path, output_path, box)
             except OSError:
-                logger.exception("Skipping %s", page_path)
+                logger.exception("Skipping %s/%s", invoice_dir.name, page_path.name)
             else:
                 cropped.append(output_path)
 

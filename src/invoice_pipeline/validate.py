@@ -145,7 +145,7 @@ def validate_all(extracted_dir: Path) -> dict[Path, ValidationReport]:
     Returns a mapping from each JSON file to its report.
     """
     if not extracted_dir.is_dir():
-        logger.warning("Extracted folder not found: %s", extracted_dir)
+        logger.warning("Extracted folder not found: %s", extracted_dir.name)
         return {}
     reports: dict[Path, ValidationReport] = {}
     for json_path in sorted(extracted_dir.glob("*.json")):

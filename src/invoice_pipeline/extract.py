@@ -457,7 +457,7 @@ def main() -> None:
         vendor_dirs = [d for d in vendor_dirs if d.name == args.vendor]
         if not vendor_dirs:
             parser.error(
-                f"No usable vendor folder named {args.vendor!r} in {config.body_crops_dir}"
+                f"No usable vendor folder named {args.vendor!r} in {config.body_crops_dir.name}"
             )
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
@@ -478,7 +478,9 @@ def main() -> None:
             )
         except (OSError, pydantic.ValidationError):
             logger.exception("Skipping %s: the groups file is unusable", vendor_dir.name)
-    logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
+    logger.info(
+        "Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir.name
+    )
 
 
 if __name__ == "__main__":
