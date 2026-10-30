@@ -21,6 +21,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Tests for `validate.py` (`tests/test_validate.py`), with invented invoices built from the real schema.
 
 ### Changed
+- `validate.py` returns each invoice's errors as a list of plain messages (an empty list means OK) instead of a report object; the rules and the messages are the same.
 - `pick_boxes.py` opens a matplotlib window instead of a browser page: drag to draw a zone, press `b` (body) or `i` (invoice number) to save it. The local web server and its HTML/CSS/JS are gone; `matplotlib` is a new dependency.
 - `price_per` is written the same way for every vendor: `CASE`, `PER CASE`, `CS` and `MC` all become `CS`, so a query by case does not miss lines. Any other unit (such as `ea`) is kept as printed, and an empty one stays `null`. `extract.py` does this after reading the pages, not the AI.
 - **Breaking:** `validate.py` works with the current schema and now checks each line only: E2 (quantity present, and price and total when there is a quantity), E3 (`quantity` x `price` = `line_total`, one cent of tolerance), E6 (no negative amounts, `quantity` not above `qty_ordered`) and E7 (the invoice has at least one line). The checks of the totals block, the subtotal, the UPC, the unfulfilled lists and the other warnings were removed for now.

@@ -1,194 +1,120 @@
-"""Check that the extracted invoice data is internally consistent.
+"""Check that every extracted invoice is consistent. It only reads the data.
 
-The AI can misread a digit and still return a well-formed JSON, so this stage
-checks the arithmetic the invoice itself provides on each line. It only reads
-the data and never corrects it.
+The AI can misread a digit and still return a valid JSON, so each line is checked
+with its own arithmetic. Every error makes the invoice fail:
 
-Rules (``E`` = error, the invoice fails; ``W`` = warning; ``I`` = information):
+    E2  every line has a quantity; a line with quantity above 0 also has price and line_total
+    E3  quantity x price = line_total, with one cent of tolerance (quantity 0 must total 0)
+    E6  no negative amounts, and quantity never above qty_ordered
+    E7  the invoice has at least one line
 
-* E2 every line has its quantity; a line with a quantity above 0 also has price and line total.
-* E3 quantity x price = line total (a line with quantity 0 must total 0).
-* E6 no negative amounts, and never more shipped than ordered (only when the invoice has
-  an ordered column).
-* E7 the invoice has at least one line (an empty one needs a look, for example when every row
-  was a free item with no price and was dropped).
-
-Nothing else is checked about the invoice as a whole yet (totals, subtotal, missing pages)
-nor about the description, the size or the UPC.
+The totals, the subtotal, the description, the size and the UPC are not checked yet.
 """
 
-from __future__ import annotations
-
-import enum
 import logging
-from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path
 
+from invoice_pipeline.config import load_config
+from invoice_pipeline.logging_setup import setup_logging
 from invoice_pipeline.schemas import InvoiceExtraction
+from invoice_pipeline.vendors import vendor_folders
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("invoice_pipeline.validate")
 
-# Invoices round each line to the cent, so allow a one-cent difference.
-TOLERANCE = Decimal("0.01")
-
-
-class Severity(enum.StrEnum):
-    ERROR = "error"
-    WARNING = "warning"
-    INFO = "info"
+TOLERANCE = Decimal("0.01")  # invoices round each line to the cent
+AMOUNT_FIELDS = ("quantity", "price", "list_price", "unit_price", "line_total")
 
 
-@dataclass(frozen=True)
-class Issue:
-    """One finding. ``line`` is the 1-based position among the invoice lines."""
-
-    severity: Severity
-    rule: str
-    message: str
-    page: int | None = None
-    line: int | None = None
-
-    def __str__(self) -> str:
-        where = ""
-        if self.line is not None:
-            where = f" (line {self.line}, page {self.page})"
-        return f"{self.rule} {self.message}{where}"
+def money(value):
+    """Turn a float into a Decimal through str, so 0.1 stays exactly 0.1."""
+    if value is None:
+        return None
+    return Decimal(str(value))
 
 
-@dataclass
-class ValidationReport:
-    """Every finding for one invoice."""
+def check_line(line):
+    """Return the errors of one line as messages, such as "E2 quantity is missing"."""
+    errors = []
+    quantity = line.quantity
+    price = money(line.price)
+    line_total = money(line.line_total)
 
-    invoice_number: str | None
-    issues: list[Issue] = field(default_factory=list)
+    if quantity is None:
+        errors.append("E2 quantity is missing")
+    elif quantity > 0:
+        if price is None or line_total is None:
+            errors.append("E2 price or line_total is missing on a line with quantity")
+        elif abs(quantity * price - line_total) > TOLERANCE:
+            errors.append(
+                f"E3 {quantity} x {price} = {quantity * price}, but line_total is {line_total}"
+            )
+    elif line_total is not None and line_total != 0:
+        errors.append(f"E3 quantity is 0, but line_total is {line_total}")
 
-    def _of(self, severity: Severity) -> list[Issue]:
-        return [issue for issue in self.issues if issue.severity == severity]
-
-    @property
-    def errors(self) -> list[Issue]:
-        return self._of(Severity.ERROR)
-
-    @property
-    def warnings(self) -> list[Issue]:
-        return self._of(Severity.WARNING)
-
-    @property
-    def ok(self) -> bool:
-        """True when nothing blocks the invoice (warnings and notes do not)."""
-        return not self.errors
-
-
-def _money(value: float | None) -> Decimal | None:
-    """Convert through ``str`` so 0.1 stays 0.1 and not 0.1000000000000000055."""
-    return None if value is None else Decimal(str(value))
-
-
-def _differ(a: Decimal, b: Decimal) -> bool:
-    return abs(a - b) > TOLERANCE
+    for field in AMOUNT_FIELDS:
+        value = getattr(line, field)
+        if value is not None and value < 0:
+            errors.append(f"E6 {field} is negative ({value})")
+    if line.qty_ordered is not None and quantity is not None and quantity > line.qty_ordered:
+        errors.append(f"E6 quantity {quantity} is above qty_ordered {line.qty_ordered}")
+    return errors
 
 
-def validate_invoice(invoice: InvoiceExtraction) -> ValidationReport:
-    """Run every rule on one extracted invoice and return all the findings."""
-    report = ValidationReport(invoice_number=invoice.invoice_number)
-
-    def add(severity: Severity, rule: str, message: str, page=None, line=None) -> None:
-        report.issues.append(Issue(severity, rule, message, page, line))
-
+def validate_invoice(invoice):
+    """Return every error of one invoice as a message. An empty list means it is OK."""
     if not invoice.lines:
-        add(Severity.ERROR, "E7", "the invoice has no lines")
+        return ["E7 the invoice has no lines"]
 
+    errors = []
     for number, line in enumerate(invoice.lines, start=1):
-        where = {"page": line.page, "line": number}
-        quantity = line.quantity
-        price = _money(line.price)
-        line_total = _money(line.line_total)
-
-        if quantity is None:
-            add(Severity.ERROR, "E2", "quantity is missing", **where)
-        elif quantity > 0 and (price is None or line_total is None):
-            add(
-                Severity.ERROR,
-                "E2",
-                "price or line_total is missing on a line with quantity",
-                **where,
-            )
-        elif quantity > 0:
-            if _differ(quantity * price, line_total):
-                add(
-                    Severity.ERROR,
-                    "E3",
-                    f"{quantity} x {price} = {quantity * price}, but line_total is {line_total}",
-                    **where,
-                )
-        elif line_total is not None and line_total != 0:
-            add(Severity.ERROR, "E3", f"quantity is 0, but line_total is {line_total}", **where)
-
-        for name in ("quantity", "price", "list_price", "unit_price", "line_total"):
-            value = getattr(line, name)
-            if value is not None and value < 0:
-                add(Severity.ERROR, "E6", f"{name} is negative ({value})", **where)
-        if line.qty_ordered is not None and quantity is not None and quantity > line.qty_ordered:
-            add(
-                Severity.ERROR,
-                "E6",
-                f"quantity {quantity} is above qty_ordered {line.qty_ordered}",
-                **where,
-            )
-    return report
+        for error in check_line(line):
+            errors.append(f"{error} (line {number}, page {line.page})")
+    return errors
 
 
-def validate_all(extracted_dir: Path) -> dict[Path, ValidationReport]:
-    """Validate every ``*.json`` invoice in ``extracted_dir``.
-
-    Returns a mapping from each JSON file to its report.
-    """
+def validate_all(extracted_dir):
+    """Validate every JSON invoice in extracted_dir. Returns {json path: errors}."""
+    results = {}
     if not extracted_dir.is_dir():
         logger.warning("Extracted folder not found: %s", extracted_dir.name)
-        return {}
-    reports: dict[Path, ValidationReport] = {}
+        return results
+
     for json_path in sorted(extracted_dir.glob("*.json")):
         invoice = InvoiceExtraction.model_validate_json(json_path.read_text(encoding="utf-8"))
-        report = validate_invoice(invoice)
-        reports[json_path] = report
-        for issue in report.issues:
-            level = {
-                Severity.ERROR: logging.ERROR,
-                Severity.WARNING: logging.WARNING,
-                Severity.INFO: logging.INFO,
-            }[issue.severity]
-            logger.log(level, "%s: %s", json_path.name, issue)
-        logger.info(
-            "Validated %s: %s (%d error(s), %d warning(s))",
-            json_path.name,
-            "OK" if report.ok else "FAILED",
-            len(report.errors),
-            len(report.warnings),
-        )
-    return reports
+        errors = validate_invoice(invoice)
+        results[json_path] = errors
+
+        for error in errors:
+            logger.error("%s: %s", json_path.name, error)
+        if errors:
+            logger.info("Validated %s: FAILED (%d error(s))", json_path.name, len(errors))
+        else:
+            logger.info("Validated %s: OK", json_path.name)
+    return results
 
 
-def main() -> None:
-    """Validate every extracted invoice of every known vendor (manual run)."""
-    from invoice_pipeline.config import load_config
-    from invoice_pipeline.logging_setup import setup_logging
-    from invoice_pipeline.vendors import vendor_folders
-
+def main():
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
-    reports: dict[Path, ValidationReport] = {}
-    for vendor_dir in vendor_folders(config.extracted_dir, config.vendors_dir):
-        reports.update(validate_all(vendor_dir))
-    failed = sum(1 for report in reports.values() if not report.ok)
-    logger.info("Done: %d invoice(s) validated, %d failed.", len(reports), failed)
+
+    vendor_dirs = vendor_folders(config.extracted_dir, config.vendors_dir)
+    if not vendor_dirs:
+        logger.warning(
+            "No extracted invoices in %s: run extract.py first", config.extracted_dir.name
+        )
+        return
+
+    results = {}
+    for vendor_dir in vendor_dirs:
+        results.update(validate_all(vendor_dir))
+
+    failed = 0
+    for errors in results.values():
+        if errors:
+            failed += 1
+    logger.info("Done: %d invoice(s) validated, %d failed", len(results), failed)
 
 
 if __name__ == "__main__":
-    # Re-import under the real module name so this module's logger falls under
-    # the configured "invoice_pipeline" logger (when run directly, __name__ is
-    # "__main__" and its messages would be lost).
-    from invoice_pipeline.validate import main as _main
-
-    _main()
+    main()
