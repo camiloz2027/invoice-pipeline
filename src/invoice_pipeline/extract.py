@@ -1,37 +1,40 @@
-"""Extract the invoice lines from the cropped page images with AI vision."""
+"""Extract the invoice lines from the body crops with AI vision.
 
-from __future__ import annotations
+Every page of an invoice is sent to the AI on its own. The code then joins the
+pages, adds what the AI must not decide (the invoice number, the date and the
+page of each line) and saves one JSON per invoice in extracted/<vendor>/.
+"""
 
 import base64
 import datetime
 import hashlib
 import logging
 import re
-from pathlib import Path
+import sys
 
 import anthropic
 import pydantic
 
+from invoice_pipeline.config import load_config
+from invoice_pipeline.logging_setup import setup_logging
 from invoice_pipeline.schemas import (
     ExtractedLine,
     InvoiceExtraction,
     InvoiceGroups,
-    InvoiceLine,
     InvoiceTotals,
     PageExtraction,
 )
+from invoice_pipeline.vendors import load_vendor, vendor_folders
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("invoice_pipeline.extract")
 
 MODEL = "claude-haiku-5-5"
-# A page is a few thousand tokens of JSON, and this model's reasoning counts toward the limit.
-MAX_TOKENS = 16000
-# Strike-throughs and faint print need careful reading, so the effort is high.
-EFFORT = "high"
+MAX_TOKENS = 16000  # a page is a few thousand tokens of JSON, plus the model's reasoning
+EFFORT = "high"  # strike-throughs and faint print need careful reading
 
-# What each field is lives in the field descriptions of ``schemas.py`` (they
-# travel inside the response schema). The prompt holds how to behave and the
-# rules that cross several fields.
+# What each field means is in the field descriptions of schemas.py, which travel
+# inside the response schema. The prompt holds how to behave and the rules that
+# involve several fields.
 PROMPT = """\
 This image is one cropped page of a vendor invoice. Read the page and fill the
 sections of the response. Describe every column by what it means, not by its header.
@@ -123,210 +126,190 @@ NUMBER_FIELDS = (
     "line_total",
 )
 
-
-# A pack size such as 12/325G, 6/6X38G or 6/1.75L, with no trailing "*".
+# A pack size such as 12/325G, 6/6X38G or 6/1.75L: a number, then one or more
+# "/number" or "x number", then a unit.
 SIZE_PATTERN = re.compile(r"\d+(?:\.\d+)?(?:\s?[/xX]\s?\d+(?:\.\d+)?)+\s?[A-Za-z]+")
 
-
-# The ways the invoices print "sold by the case", all written as CS.
+# The ways the invoices print "sold by the case", all saved as CS.
 PRICE_PER_ALIASES = {"CASE": "CS", "PER CASE": "CS", "CS": "CS", "MC": "CS"}
 
 
-class ExtractionError(Exception):
-    """Raised when a page or an invoice cannot be extracted."""
-
-
-def _size_in(description: str) -> str | None:
-    """The pack size written at the end of a description, such as 12/325G, or None."""
+def size_in(description):
+    """Return the last pack size written in the description, such as 12/325G, or None."""
     matches = SIZE_PATTERN.findall(description)
-    return matches[-1].replace(" ", "") if matches else None
+    if not matches:
+        return None
+    return matches[-1].replace(" ", "")
 
 
-def _standard_price_per(value: str | None) -> str | None:
-    """The unit a price refers to, with the ways of writing "case" turned into CS.
+def standard_price_per(value):
+    """Return the unit of the price, with every way of writing "case" saved as CS."""
+    if value is None:
+        return None
+    text = " ".join(value.split())  # remove extra spaces: " per  case " -> "per case"
+    if text == "":
+        return None
+    return PRICE_PER_ALIASES.get(text.upper(), text)
 
-    Any other unit (such as "ea") is kept as printed, only with its spaces tidied.
+
+def is_empty_row(line):
+    """True for a row with no codes and no numbers: only a piece of text."""
+    if line.upc is not None or line.item_code is not None:
+        return False
+    for field in NUMBER_FIELDS:
+        if getattr(line, field) is not None:
+            return False
+    return True
+
+
+def merge_totals(first, extra, name, page_number):
+    """Join two parts of a totals block that is split over two pages.
+
+    Each amount is taken from the first part that has it. Fees already read
+    (same label and amount) are not added twice.
     """
-    text = " ".join((value or "").split())
-    return PRICE_PER_ALIASES.get(text.upper(), text) or None
-
-
-def _is_empty_row(line: InvoiceLine) -> bool:
-    """True for a row with no UPC, no item code and no numbers, that is, just a piece of text.
-
-    At the top of a page it is the end of a description that ran over from the
-    previous page, not an item.
-    """
-    return (
-        line.upc is None
-        and line.item_code is None
-        and all(getattr(line, name) is None for name in NUMBER_FIELDS)
-    )
-
-
-def _merge_totals(
-    first: InvoiceTotals, extra: InvoiceTotals, invoice_name: str, page_number: int
-) -> InvoiceTotals:
-    """Join two totals blocks read from different pages.
-
-    The totals block can be split over two pages (the subtotal at the bottom of
-    one, the fees and the total at the top of the next). Each amount is taken
-    from the first block that has it, and the fees are put together in order. If
-    both blocks have a value for the same amount and they differ, the first one
-    is kept and a warning is logged. A fee already read (same label and amount)
-    is not added twice.
-    """
-    merged: dict[str, float | None] = {}
-    for name in ("subtotal", "total"):
-        old, new = getattr(first, name), getattr(extra, name)
+    amounts = {}
+    for field in ("subtotal", "total"):
+        old = getattr(first, field)
+        new = getattr(extra, field)
         if old is not None and new is not None and old != new:
             logger.warning(
                 "%s page %d: the %s differs from the one already read (%s vs %s); keeping the first",
-                invoice_name,
-                page_number,
                 name,
+                page_number,
+                field,
                 old,
                 new,
             )
-        merged[name] = old if old is not None else new
+        if old is not None:
+            amounts[field] = old
+        else:
+            amounts[field] = new
+
     charges = list(first.charges)
     for charge in extra.charges:
         if charge not in charges:
             charges.append(charge)
-    return InvoiceTotals(charges=charges, **merged)
+    return InvoiceTotals(subtotal=amounts["subtotal"], total=amounts["total"], charges=charges)
 
 
-def _prompt(notes: str | None) -> str:
-    """The prompt, with the vendor's notes at the end when it has any."""
+def build_prompt(notes):
+    """Return the prompt, with the vendor's notes at the end when it has any."""
     if not notes:
         return PROMPT
     return f"{PROMPT}\nNotes about these invoices:\n{notes}\n"
 
 
-def extract_page(
-    client: anthropic.Anthropic, image_path: Path, notes: str | None = None
-) -> PageExtraction:
-    """Send one page image to the AI and return what it read.
+def extract_page(client, image_path, notes):
+    """Send one page image to the AI and return what it read (a PageExtraction).
 
-    The response schema is enforced by the API, and the SDK validates the reply
-    against ``PageExtraction``. ``notes`` is the vendor's text for the prompt. Raises
-    ExtractionError if the call fails or the reply is unusable (a refusal, or a reply
-    cut off at ``MAX_TOKENS``).
+    The API makes the reply follow the PageExtraction schema.
     """
-    try:
-        image_data = base64.standard_b64encode(Path(image_path).read_bytes()).decode("utf-8")
-        response = client.messages.parse(
-            model=MODEL,
-            max_tokens=MAX_TOKENS,
-            output_config={"effort": EFFORT},
-            output_format=PageExtraction,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        # The image goes before the text, as the API docs recommend.
-                        {
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": "image/png",
-                                "data": image_data,
-                            },
-                        },
-                        {"type": "text", "text": _prompt(notes)},
-                    ],
-                }
-            ],
-        )
-    except OSError as error:
-        raise ExtractionError(f"Could not read {Path(image_path).name}: {error}") from error
-    except anthropic.APIError as error:
-        raise ExtractionError(f"API call failed for {Path(image_path).name}: {error}") from error
-    except pydantic.ValidationError as error:
-        # The SDK could not parse the reply: a refusal or a reply cut at max_tokens.
-        raise ExtractionError(
-            f"The reply for {Path(image_path).name} did not match the schema: {error}"
-        ) from error
+    image_data = base64.standard_b64encode(image_path.read_bytes()).decode()
+    image = {
+        "type": "image",
+        "source": {"type": "base64", "media_type": "image/png", "data": image_data},
+    }
+    text = {"type": "text", "text": build_prompt(notes)}
 
-    page = response.parsed_output
-    if page is None:
-        raise ExtractionError(
-            f"No result for {Path(image_path).name} (stop reason: {response.stop_reason})"
-        )
+    response = client.messages.parse(
+        model=MODEL,
+        max_tokens=MAX_TOKENS,
+        output_config={"effort": EFFORT},
+        output_format=PageExtraction,
+        # The image goes before the text, as the API docs recommend.
+        messages=[{"role": "user", "content": [image, text]}],
+    )
+    if response.parsed_output is None:
+        raise ValueError(f"No result for {image_path.name} (stop reason: {response.stop_reason})")
 
     logger.info(
         "%s: %d input / %d output tokens",
-        Path(image_path).name,
+        image_path.name,
         response.usage.input_tokens,
         response.usage.output_tokens,
     )
-    return page
+    return response.parsed_output
 
 
-def extract_invoice(
-    client: anthropic.Anthropic,
-    page_images: list[Path],
-    invoice_number: str | None,
-    extracted_dir: Path,
-    name: str,
-    notes: str | None = None,
-) -> Path:
-    """Extract the pages of one invoice and save the final JSON.
+def join_continued_text(lines, page, name, page_number):
+    """Add the text that ends the previous page's last row to that row.
 
-    ``page_images`` are the body crops of the invoice in reading order; they can
-    come from different PDFs. The JSON is saved as ``extracted_dir/<name>.json``
-    and ``name`` is also what the log calls the invoice. The invoice number, the
-    extraction date, each line's page (its position in ``page_images``) and the
-    joining of descriptions that run over two pages are done here, by the code,
-    not by the AI. ``notes`` is the vendor's text for the prompt.
-
-    If any page fails, nothing is saved: a JSON with missing pages would look
-    like a complete invoice. Running it again overwrites the previous JSON.
+    That text is at the top of the page, in continued_description or as a row
+    with no codes and no numbers. Returns the page's rows without it.
     """
-    extracted_dir = Path(extracted_dir)
-    if not page_images:
-        raise ExtractionError(f"No page images given for {name}")
+    page_lines = list(page.lines)
+    pieces = []
+    if page.continued_description is not None:
+        text = page.continued_description.strip()
+        if text:
+            pieces.append(text)
+    if page_lines and is_empty_row(page_lines[0]):
+        text = page_lines.pop(0).description.strip()
+        if text and text not in pieces:
+            pieces.append(text)
 
-    lines: list[ExtractedLine] = []
-    totals: InvoiceTotals | None = None
-    for page_number, image_path in enumerate(page_images, start=1):
-        page = extract_page(client, image_path, notes)
-
-        # A row split across two pages: its last description line is at the top
-        # of this page, either in ``continued_description`` or as a row with no
-        # UPC and no numbers. It belongs to the last line read so far, so it is
-        # joined before this page's own lines are added.
-        page_lines = list(page.lines)
-        fragments = [(page.continued_description or "").strip()]
-        if page_lines and _is_empty_row(page_lines[0]):
-            fragments.append(page_lines.pop(0).description.strip())
-        fragment = " ".join(dict.fromkeys(text for text in fragments if text))
-        if fragment:
-            if lines:
-                lines[-1].description = f"{lines[-1].description} {fragment}"
-            else:
-                logger.warning(
-                    "%s page %d starts with %r but there is no previous line to join it to",
-                    name,
-                    page_number,
-                    fragment,
-                )
-
-        # A row with neither a price nor a total is not an item (for example a list of
-        # items that were not supplied, which the prompt tells the AI to ignore).
-        priced = [
-            line for line in page_lines if line.price is not None or line.line_total is not None
-        ]
-        if len(priced) < len(page_lines):
+    if pieces:
+        piece = " ".join(pieces)
+        if lines:
+            lines[-1].description = f"{lines[-1].description} {piece}"
+        else:
             logger.warning(
-                "%s page %d: dropped %d row(s) with no price and no total",
+                "%s page %d starts with %r but there is no previous line to join it to",
                 name,
                 page_number,
-                len(page_lines) - len(priced),
+                piece,
             )
-        page_lines = priced
+    return page_lines
 
-        lines.extend(ExtractedLine(**line.model_dump(), page=page_number) for line in page_lines)
+
+def drop_unpriced(page_lines, name, page_number):
+    """Remove the rows with no price and no total: they are not items."""
+    priced = []
+    for line in page_lines:
+        if line.price is not None or line.line_total is not None:
+            priced.append(line)
+
+    dropped = len(page_lines) - len(priced)
+    if dropped:
+        logger.warning(
+            "%s page %d: dropped %d row(s) with no price and no total", name, page_number, dropped
+        )
+    return priced
+
+
+def clean_line(line):
+    """Save price_per in the standard way and fill a missing size from the description."""
+    line.price_per = standard_price_per(line.price_per)
+    if line.size is None:
+        # For example a row split over two pages: its size is in the joined description.
+        line.size = size_in(line.description)
+    elif line.size.endswith("*"):
+        # A trailing "*" is a mark printed in the description, not part of the size.
+        size = line.size.rstrip("*").strip()
+        if size == "":
+            size = None
+        line.size = size
+
+
+def extract_invoice(client, page_images, invoice_number, output_path, notes):
+    """Extract the pages of one invoice in order and save the final JSON.
+
+    If any page fails, nothing is saved, because a JSON with missing pages would
+    look like a complete invoice.
+    """
+    name = output_path.stem
+    lines = []
+    totals = None
+
+    for page_number, image_path in enumerate(page_images, start=1):
+        page = extract_page(client, image_path, notes)
+        page_lines = join_continued_text(lines, page, name, page_number)
+        page_lines = drop_unpriced(page_lines, name, page_number)
+        for line in page_lines:
+            # Copy the fields the AI read and add the page number.
+            lines.append(ExtractedLine(**line.model_dump(), page=page_number))
+
         if page.totals is not None:
             if totals is None:
                 totals = page.totals
@@ -336,20 +319,11 @@ def extract_invoice(
                     name,
                     page_number,
                 )
-                totals = _merge_totals(totals, page.totals, name, page_number)
+                totals = merge_totals(totals, page.totals, name, page_number)
         logger.info("Extracted %s page %d: %d line(s)", name, page_number, len(page_lines))
 
-    # A row split across two pages has its size in the joined description, so the
-    # AI left it null when it read the first page. Any other row with no size gets
-    # the same fallback.
-    # A trailing "*" is a mark printed in the description, not part of the size.
     for line in lines:
-        line.price_per = _standard_price_per(line.price_per)
-        if line.size is None:
-            line.size = _size_in(line.description)
-        elif line.size.endswith("*"):
-            line.size = line.size.rstrip("*").strip() or None
-
+        clean_line(line)
     if totals is None:
         logger.warning("%s: no totals block found on any page", name)
 
@@ -359,51 +333,42 @@ def extract_invoice(
         lines=lines,
         totals=totals,
     )
-
-    extracted_dir.mkdir(parents=True, exist_ok=True)
-    output_path = extracted_dir / f"{name}.json"
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     logger.info("Saved %s: %d line(s)", output_path.name, len(lines))
-    return output_path
 
 
-def unique_pages(body_dir: Path, pages: list[str]) -> tuple[list[Path], int]:
-    """The body crops of ``pages`` without exact copies, and how many copies were left out.
+def unique_pages(body_dir, pages):
+    """Return the paths of the invoice's pages, leaving out exact copies.
 
     Two crops with the same content are the same page twice (a PDF repeated inside
-    another one), so only the first is kept. It is only used on the pages of one
-    invoice: identical pages of two different invoices are both real.
+    another one). Only used inside one invoice: identical pages of two invoices are real.
     """
-    seen: set[str] = set()
-    kept: list[Path] = []
+    seen = set()
+    kept = []
     for page in pages:
-        path = Path(body_dir) / page
+        path = body_dir / page
         digest = hashlib.sha256(path.read_bytes()).hexdigest()
         if digest not in seen:
             seen.add(digest)
             kept.append(path)
-    return kept, len(pages) - len(kept)
+    return kept
 
 
-def _file_name(invoice_number: str) -> str:
-    """A safe file name for an invoice number, which can hold characters such as '/' or '.'."""
-    return re.sub(r"[^\w-]+", "_", invoice_number).strip("_") or "invoice"
+def file_name(invoice_number):
+    """Safe file name for an invoice number, which can hold characters such as '/'."""
+    name = re.sub(r"[^\w-]+", "_", invoice_number).strip("_")
+    if name == "":
+        name = "invoice"
+    return name
 
 
-def extract_vendor(
-    client: anthropic.Anthropic,
-    groups_path: Path,
-    body_dir: Path,
-    extracted_dir: Path,
-    notes: str | None = None,
-) -> dict[str, Path]:
-    """Extract every invoice listed in a vendor's groups file; a failing one is logged and skipped.
+def extract_vendor(client, groups_path, body_dir, extracted_dir, notes):
+    """Extract every invoice of a vendor's groups file. Returns how many were saved.
 
-    ``groups_path`` is the file written by ``group.py`` and ``body_dir`` the vendor's folder in
-    ``body_crops``. ``notes`` is the vendor's text for the prompt. The pages in the review list
-    are never extracted. Returns a mapping of each invoice number to its JSON file.
+    A failing invoice is logged and skipped. Pages in review are never extracted.
     """
-    groups = InvoiceGroups.model_validate_json(Path(groups_path).read_text(encoding="utf-8"))
+    groups = InvoiceGroups.model_validate_json(groups_path.read_text(encoding="utf-8"))
     if groups.review:
         logger.warning(
             "%d page(s) are in review and will not be extracted: %s",
@@ -411,54 +376,49 @@ def extract_vendor(
             ", ".join(groups.review),
         )
 
-    results: dict[str, Path] = {}
-    names: dict[str, str] = {}
+    extracted = 0
+    used_names = {}
     for number, pages in groups.groups.items():
-        name = _file_name(number)
-        if name in names:
-            logger.error("Skipping %s: its file name clashes with invoice %s", number, names[name])
-            continue
-        names[name] = number
-        try:
-            page_images, repeated = unique_pages(body_dir, pages)
-        except OSError:
-            logger.exception("Skipping %s: could not read its pages", number)
-            continue
-        if repeated:
-            logger.info("%s: left out %d repeated page(s)", number, repeated)
-        try:
-            results[number] = extract_invoice(
-                client, page_images, number, extracted_dir, name, notes
+        name = file_name(number)
+        if name in used_names:
+            logger.error(
+                "Skipping %s: its file name clashes with invoice %s", number, used_names[name]
             )
-        except ExtractionError:
+            continue
+        used_names[name] = number
+
+        try:
+            page_images = unique_pages(body_dir, pages)
+            repeated = len(pages) - len(page_images)
+            if repeated:
+                logger.info("%s: left out %d repeated page(s)", number, repeated)
+            output_path = extracted_dir / f"{name}.json"
+            extract_invoice(client, page_images, number, output_path, notes)
+            extracted += 1
+        except (OSError, anthropic.APIError, pydantic.ValidationError, ValueError):
             logger.exception("Skipping %s", number)
-    return results
+    return extracted
 
 
-def main() -> None:
-    """Extract the invoices of every known vendor, or of one, from its groups file (manual run)."""
-    import argparse
-
-    from invoice_pipeline.config import load_config
-    from invoice_pipeline.logging_setup import setup_logging
-    from invoice_pipeline.vendors import load_vendor, vendor_folders
-
-    parser = argparse.ArgumentParser(
-        description="Extract the invoices of the vendors' groups files."
-    )
-    parser.add_argument("vendor", nargs="?", help="only this vendor folder (default: all)")
-    args = parser.parse_args()
+def main():
+    """Extract every vendor, or only the one given: python extract.py <vendor>."""
+    only_vendor = None
+    if len(sys.argv) > 1:
+        only_vendor = sys.argv[1]
 
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
+
     vendor_dirs = vendor_folders(config.body_crops_dir, config.vendors_dir)
-    if args.vendor:
-        vendor_dirs = [d for d in vendor_dirs if d.name == args.vendor]
+    if only_vendor:
+        vendor_dirs = [d for d in vendor_dirs if d.name == only_vendor]
         if not vendor_dirs:
-            parser.error(
-                f"No usable vendor folder named {args.vendor!r} in {config.body_crops_dir}"
-            )
+            raise SystemExit(f"No usable vendor folder named {only_vendor!r} in body_crops")
+    if not vendor_dirs:
+        logger.warning("No body crops in %s: run crop.py first", config.body_crops_dir.name)
+        return
+
     client = anthropic.Anthropic(api_key=config.require_api_key())
     extracted = 0
     for vendor_dir in vendor_dirs:
@@ -466,25 +426,18 @@ def main() -> None:
         if not groups_path.is_file():
             logger.error("No groups file for %s: run group.py first", vendor_dir.name)
             continue
+
+        notes = load_vendor(config.vendors_dir, vendor_dir.name).notes
+        output_dir = config.extracted_dir / vendor_dir.name
         try:
-            extracted += len(
-                extract_vendor(
-                    client,
-                    groups_path,
-                    vendor_dir,
-                    config.extracted_dir / vendor_dir.name,
-                    load_vendor(config.vendors_dir, vendor_dir.name).notes,
-                )
-            )
+            extracted += extract_vendor(client, groups_path, vendor_dir, output_dir, notes)
         except (OSError, pydantic.ValidationError):
             logger.exception("Skipping %s: the groups file is unusable", vendor_dir.name)
-    logger.info("Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir)
+
+    logger.info(
+        "Done: %d invoice(s) extracted. JSON files in %s", extracted, config.extracted_dir.name
+    )
 
 
 if __name__ == "__main__":
-    # Re-import under the real module name so this module's logger falls under
-    # the configured "invoice_pipeline" logger (when run directly, __name__ is
-    # "__main__" and its messages would be lost).
-    from invoice_pipeline.extract import main as _main
-
-    _main()
+    main()

@@ -88,8 +88,16 @@ def verify_upright(image):
     for turn in (0, 90, 180, 270):
         scores[turn] = count_words(gray.rotate(-turn, expand=True))
 
-    best = max(scores, key=scores.get)
-    runner_up = max(score for turn, score in scores.items() if turn != best)
+    # The orientation with the most words, and the score of the next best one.
+    best = 0
+    for turn, score in scores.items():
+        if score > scores[best]:
+            best = turn
+    runner_up = 0
+    for turn, score in scores.items():
+        if turn != best and score > runner_up:
+            runner_up = score
+
     if scores[best] < MIN_WORDS or scores[best] < MIN_MARGIN * runner_up:
         return None
     return best

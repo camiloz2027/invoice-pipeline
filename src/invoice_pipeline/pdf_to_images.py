@@ -59,7 +59,7 @@ def convert_all(raw_dir, images_dir, unverified, dpi=DPI):
     results = {}
 
     if not raw_dir.is_dir():
-        logger.warning("Input folder does not exist: %s", raw_dir)
+        logger.warning("Input folder does not exist: %s", raw_dir.name)
         return results
 
     for pdf_path in sorted(raw_dir.iterdir()):
