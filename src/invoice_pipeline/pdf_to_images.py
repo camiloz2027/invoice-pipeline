@@ -7,7 +7,7 @@ import pypdfium2 as pdfium
 
 from invoice_pipeline.config import load_config
 from invoice_pipeline.logging_setup import setup_logging
-from invoice_pipeline.orientation import straighten
+from invoice_pipeline.orientation import check_tesseract, straighten
 from invoice_pipeline.vendors import settings_path
 
 logger = logging.getLogger("invoice_pipeline.pdf_to_images")
@@ -77,6 +77,7 @@ def main():
     config = load_config()
     config.ensure_dirs()
     setup_logging(config)
+    check_tesseract()
 
     converted = 0
     unverified = []
