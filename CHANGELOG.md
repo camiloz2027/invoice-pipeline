@@ -14,7 +14,7 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Orientation check (`orientation.py`): after turning a page upright, `pdf_to_images.py` reads it in all four orientations and keeps the one that reads clearly better. A page where none does is reported in the log and the command ends with an error, so a sideways page cannot go on to the AI unnoticed.
 - `group.py`: reads the invoice number of every page from the `id_crops` with Claude Sonnet 5.5 and groups the pages by it in `data/interim/groups/<vendor>.json`. The AI only sees neutral labels, never file or vendor names; unreadable or odd numbers go to a review list.
 
-- Per-vendor `notes` in the settings file: free text added to the extraction prompt for that vendor only. `vendors.py` accepts the key (`Vendor.notes`, `load_notes`) and `save_box` keeps it.
+- Per-vendor `notes` in the settings file: free text added to the extraction prompt for that vendor only. `vendors.py` accepts the key (`Vendor.notes`) and `save_box` keeps it.
 - `extract.py` accepts an optional vendor name (`extract.py <vendor>`) to extract only that vendor, so a new vendor can be tried without paying again for the others.
 - `size` is always filled: when the AI leaves it empty, the code takes it from the description (for example a description split over two pages), and a trailing `*` is removed.
 

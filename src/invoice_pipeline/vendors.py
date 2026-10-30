@@ -1,170 +1,148 @@
-"""Per-vendor settings, stored as one TOML file per vendor.
-
-A vendor is a folder under ``data/raw/``. Its settings live in
-``data/vendors/<folder name>.toml``. ``pick_boxes.py`` writes the two boxes:
+"""Per-vendor settings, one TOML file per vendor: data/vendors/<vendor>.toml.
 
     body_box = [0.025, 0.35, 0.9, 0.9]
     id_box = [0.59, 0.15, 0.72, 0.17]
+    notes = \"\"\"Text about how this vendor's invoices are laid out.\"\"\"
 
 Each box is (left, top, right, bottom) as fractions of the page, from 0 to 1.
-The file may also hold ``notes``, a text written by hand (a TOML multi-line string)
-about how that vendor's invoices are laid out. It is added to the extraction prompt,
-so it must not name the vendor: vendor names stay local, never sent to the AI.
+pick_boxes.py writes the boxes. The notes are optional, written by hand and added
+to the extraction prompt, so they must never name the vendor.
 """
 
-from __future__ import annotations
-
 import logging
-import os
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("invoice_pipeline.vendors")
 
-# (left, top, right, bottom) as fractions of the page, from 0 to 1.
-# Fractions do not depend on the DPI used to render the pages.
-Box = tuple[float, float, float, float]
-
-# The boxes a settings file may hold, in the order they are written.
 BOX_KEYS = ("body_box", "id_box")
-# The only other key: free text that is added to the extraction prompt.
-NOTES_KEY = "notes"
 
 
 class VendorError(Exception):
     """Raised when a vendor's settings are missing or invalid."""
 
 
-@dataclass(frozen=True)
+@dataclass
 class Vendor:
-    """What differs from one vendor's invoices to another's."""
-
-    # Region with the invoice lines and totals; the rest of the page is cut away.
-    body_box: Box
-    # Small region with only the invoice number (none until it is chosen).
-    id_box: Box | None = None
-    # Text about this vendor's invoices for the extraction prompt (none if not written).
-    notes: str | None = None
+    body_box: tuple  # the invoice lines and totals
+    id_box: tuple | None = None  # only the invoice number
+    notes: str | None = None  # text for the extraction prompt
 
 
-def validate_box(box: Box) -> None:
-    """Raise ValueError unless ``box`` is (left, top, right, bottom) inside the page."""
+def settings_path(vendors_dir, name):
+    """Path of the vendor's settings file. The name must be a plain folder name."""
+    if name == "" or name.startswith(".") or "/" in name:
+        raise VendorError(f"Invalid vendor name: {name!r}")
+    return vendors_dir / f"{name}.toml"
+
+
+def check_box(box, file_name, key):
+    """Return the box as 4 floats, or raise VendorError if it is not inside the page."""
+    if not isinstance(box, list | tuple) or len(box) != 4:
+        raise VendorError(f"{file_name}: {key} must be a list of 4 numbers")
+    for value in box:
+        # In Python True and False also count as numbers, so they are refused first.
+        if isinstance(value, bool) or not isinstance(value, int | float):
+            raise VendorError(f"{file_name}: {key} must be a list of 4 numbers")
+
     left, top, right, bottom = box
     if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
-        raise ValueError(
-            f"Invalid crop box {box}: expected 0 <= left < right <= 1 and 0 <= top < bottom <= 1"
+        raise VendorError(
+            f"{file_name}: {key} {list(box)} must have 0 <= left < right <= 1 "
+            "and 0 <= top < bottom <= 1"
         )
+    return (float(left), float(top), float(right), float(bottom))
 
 
-def settings_path(vendors_dir: Path, name: str) -> Path:
-    """Path of the settings file of vendor ``name`` (a plain folder name, nothing else)."""
-    if not name or name != Path(name).name or name.startswith("."):
-        raise VendorError(f"Invalid vendor name: {name!r}")
-    return Path(vendors_dir) / f"{name}.toml"
-
-
-def _to_box(file_name: str, key: str, value: object) -> Box:
-    numbers = isinstance(value, list) and all(
-        isinstance(v, int | float) and not isinstance(v, bool) for v in value
-    )
-    if not (numbers and len(value) == 4):
-        raise VendorError(f"{file_name}: {key} must be a list of 4 numbers")
-    box = tuple(float(v) for v in value)
-    try:
-        validate_box(box)
-    except ValueError as error:
-        raise VendorError(f"{file_name}: {key}: {error}") from error
-    return box
-
-
-def _read_settings(vendors_dir: Path, name: str) -> dict:
-    """The raw content of the settings file of ``name``; no file yet means no settings."""
+def read_settings(vendors_dir, name):
+    """Read and check the vendor's settings file. Returns {} if there is no file yet."""
     path = settings_path(vendors_dir, name)
     if not path.is_file():
         return {}
+
     try:
         with path.open("rb") as file:
             data = tomllib.load(file)
     except (OSError, tomllib.TOMLDecodeError) as error:
         raise VendorError(f"Could not read {path.name}: {error}") from error
 
-    unknown = sorted(set(data) - set(BOX_KEYS) - {NOTES_KEY})
-    if unknown:
-        raise VendorError(f"{path.name}: unknown key(s) {', '.join(unknown)}")
-    if NOTES_KEY in data and not isinstance(data[NOTES_KEY], str):
-        raise VendorError(f"{path.name}: {NOTES_KEY} must be text")
+    for key in data:
+        if key not in BOX_KEYS and key != "notes":
+            raise VendorError(f"{path.name}: unknown key {key}")
+    for key in BOX_KEYS:
+        if key in data:
+            data[key] = check_box(data[key], path.name, key)
+
+    notes = data.get("notes", "")
+    if not isinstance(notes, str):
+        raise VendorError(f"{path.name}: notes must be text")
+    notes = notes.strip()
+    if notes == "":
+        notes = None
+    data["notes"] = notes
     return data
 
 
-def load_boxes(vendors_dir: Path, name: str) -> dict[str, Box]:
-    """Read the boxes saved for ``name``; no file yet means no boxes."""
-    path = settings_path(vendors_dir, name)
-    data = _read_settings(vendors_dir, name)
-    return {key: _to_box(path.name, key, data[key]) for key in BOX_KEYS if key in data}
-
-
-def load_notes(vendors_dir: Path, name: str) -> str | None:
-    """Read the notes saved for ``name``; None when there are none or they are blank."""
-    notes = _read_settings(vendors_dir, name).get(NOTES_KEY, "").strip()
-    return notes or None
-
-
-def load_vendor(vendors_dir: Path, name: str) -> Vendor:
-    """Load the settings of vendor ``name``; fail if there is no usable body_box."""
-    path = settings_path(vendors_dir, name)
-    if not path.is_file():
-        raise VendorError(f"No settings file {path.name}. Create it with pick_boxes.py.")
-    boxes = load_boxes(vendors_dir, name)
-    if "body_box" not in boxes:
-        raise VendorError(f"{path.name}: body_box is missing. Set it with pick_boxes.py.")
-    return Vendor(
-        body_box=boxes["body_box"],
-        id_box=boxes.get("id_box"),
-        notes=load_notes(vendors_dir, name),
-    )
-
-
-def save_box(vendors_dir: Path, name: str, key: str, box: Box) -> dict[str, Box]:
-    """Save one box of vendor ``name``, keeping the other box and the notes, and return all its boxes."""
-    if key not in BOX_KEYS:
-        raise VendorError(f"Unknown box {key!r}: expected one of {', '.join(BOX_KEYS)}")
-    try:
-        validate_box(box)
-    except ValueError as error:
-        raise VendorError(str(error)) from error
-
-    boxes = load_boxes(vendors_dir, name)
-    boxes[key] = tuple(round(float(v), 4) for v in box)
-    notes = load_notes(vendors_dir, name)
-
-    path = settings_path(vendors_dir, name)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    lines = [f"{k} = {list(boxes[k])}" for k in BOX_KEYS if k in boxes]
-    if notes:
-        # A TOML multi-line string: only backslashes and triple quotes need escaping.
-        escaped = notes.replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
-        lines.append(f'{NOTES_KEY} = """\n{escaped}\n"""')
-    # Write to a temporary file first so a failure never leaves half a settings file.
-    temporary = path.with_suffix(".toml.tmp")
-    temporary.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    os.replace(temporary, path)
+def load_boxes(vendors_dir, name):
+    """Return the saved boxes of the vendor, for example {"body_box": (...)}."""
+    data = read_settings(vendors_dir, name)
+    boxes = {}
+    for key in BOX_KEYS:
+        if key in data:
+            boxes[key] = data[key]
     return boxes
 
 
-def vendor_folders(parent: Path, vendors_dir: Path) -> list[Path]:
-    """Return the subfolders of ``parent`` that have usable settings, sorted by name.
+def load_vendor(vendors_dir, name):
+    """Load the vendor's settings; fail if there is no file or no body_box."""
+    path = settings_path(vendors_dir, name)
+    if not path.is_file():
+        raise VendorError(f"No settings file {path.name}. Create it with pick_boxes.py.")
 
-    A subfolder with no valid settings is logged as an error and skipped, so its
-    pages are never cropped with another vendor's settings.
+    data = read_settings(vendors_dir, name)
+    if "body_box" not in data:
+        raise VendorError(f"{path.name}: body_box is missing. Set it with pick_boxes.py.")
+    return Vendor(body_box=data["body_box"], id_box=data.get("id_box"), notes=data["notes"])
+
+
+def save_box(vendors_dir, name, key, box):
+    """Save one box of the vendor, keeping the other box and the notes. Returns the boxes."""
+    if key not in BOX_KEYS:
+        raise VendorError(f"Unknown box {key!r}: expected body_box or id_box")
+    path = settings_path(vendors_dir, name)
+
+    data = read_settings(vendors_dir, name)
+    box = check_box(box, path.name, key)
+    data[key] = tuple(round(value, 4) for value in box)
+
+    lines = []
+    for box_key in BOX_KEYS:
+        if box_key in data:
+            lines.append(f"{box_key} = {list(data[box_key])}")
+    if data.get("notes"):
+        # In a TOML multi-line string only backslashes and triple quotes need escaping.
+        notes = data["notes"].replace("\\", "\\\\").replace('"""', '\\"\\"\\"')
+        lines.append(f'notes = """\n{notes}\n"""')
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return load_boxes(vendors_dir, name)
+
+
+def vendor_folders(parent, vendors_dir):
+    """Return the subfolders of parent that have usable settings, sorted by name.
+
+    A folder with no valid settings is logged and skipped, so its pages are never
+    cropped with another vendor's settings.
     """
-    parent = Path(parent)
     if not parent.is_dir():
         logger.warning("Input folder does not exist: %s", parent.name)
         return []
 
     folders = []
-    for folder in sorted(p for p in parent.iterdir() if p.is_dir()):
+    for folder in sorted(parent.iterdir()):
+        if not folder.is_dir():
+            continue
         try:
             load_vendor(vendors_dir, folder.name)
         except VendorError as error:
