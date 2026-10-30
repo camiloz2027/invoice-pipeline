@@ -1,21 +1,12 @@
-"""Data shapes of the grouping and the extraction stages.
+"""The shapes of the data: what the AI returns and the JSON files the pipeline saves.
 
-Grouping (``group.py``) reads the invoice number of every page:
+group.py:   the AI returns NumbersReading; the code saves InvoiceGroups.
+extract.py: the AI returns PageExtraction for each page; the code saves InvoiceExtraction.
 
-* ``NumbersReading`` is what the AI returns, one ``PageNumber`` per label.
-* ``InvoiceGroups`` is the JSON saved per vendor: the pages of each invoice number.
-
-Extraction (``extract.py``) has two layers:
-
-* ``PageExtraction`` is what the AI returns for ONE page image. Its JSON schema
-  is sent to the API as the required output format, so the response always has
-  this exact shape. The ``description`` of each field is part of that schema and
-  tells the model what the field is.
-* ``InvoiceExtraction`` is the final JSON saved per invoice. The code adds what
-  the AI must not decide: the invoice number, the extraction date and the page.
+The models the AI returns are sent to the API as the required response format,
+so their docstrings and field descriptions are instructions for the AI: change
+them only on purpose.
 """
-
-from __future__ import annotations
 
 import datetime
 
