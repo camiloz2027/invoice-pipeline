@@ -4,25 +4,22 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-30
+
 ### Added
 - Per-vendor settings: each vendor is a folder in `data/raw/` with a settings file `data/vendors/<vendor>.toml` that holds its crop regions (`body_box`, and `id_box` for the invoice number). A folder with no valid settings is logged and skipped, so a page is never cropped with another vendor's region.
-- `pick_boxes.py`: choose a vendor's crop regions by dragging on its pages in the browser and clicking a button. It runs a local-only server protected by a random token and writes the settings file.
+- `pick_boxes.py`: choose a vendor's crop regions in a matplotlib window: drag to draw a zone, press `b` (body) or `i` (invoice number) to save it in the settings file. `matplotlib` is a new dependency.
 - Page orientation (`orientation.py`): scanned pages that arrive sideways or upside down are detected locally with Tesseract and turned upright before they are saved. A page whose orientation is unclear is logged and left as it is. Tesseract is now a system requirement, plus the `pytesseract` dependency.
-
 - `crop.py` also crops each vendor's `id_box` (the invoice number) into `data/interim/id_crops/`, with the same relative path as the body crop.
-
 - Orientation check (`orientation.py`): after turning a page upright, `pdf_to_images.py` reads it in all four orientations and keeps the one that reads clearly better. A page where none does is reported in the log and the command ends with an error, so a sideways page cannot go on to the AI unnoticed.
 - `group.py`: reads the invoice number of every page from the `id_crops` with Claude Sonnet 5.5 and groups the pages by it in `data/interim/groups/<vendor>.json`. The AI only sees neutral labels, never file or vendor names; unreadable or odd numbers go to a review list.
-
 - Per-vendor `notes` in the settings file: free text added to the extraction prompt for that vendor only. `vendors.py` accepts the key (`Vendor.notes`) and `save_box` keeps it.
 - `extract.py` accepts an optional vendor name (`extract.py <vendor>`) to extract only that vendor, so a new vendor can be tried without paying again for the others.
 - `size` is always filled: when the AI leaves it empty, the code takes it from the description (for example a description split over two pages), and a trailing `*` is removed.
-
 - Tests for `validate.py` (`tests/test_validate.py`), with invented invoices built from the real schema.
 
 ### Changed
 - `validate.py` returns each invoice's errors as a list of plain messages (an empty list means OK) instead of a report object; the rules and the messages are the same.
-- `pick_boxes.py` opens a matplotlib window instead of a browser page: drag to draw a zone, press `b` (body) or `i` (invoice number) to save it. The local web server and its HTML/CSS/JS are gone; `matplotlib` is a new dependency.
 - `price_per` is written the same way for every vendor: `CASE`, `PER CASE`, `CS` and `MC` all become `CS`, so a query by case does not miss lines. Any other unit (such as `ea`) is kept as printed, and an empty one stays `null`. `extract.py` does this after reading the pages, not the AI.
 - **Breaking:** `validate.py` works with the current schema and now checks each line only: E2 (quantity present, and price and total when there is a quantity), E3 (`quantity` x `price` = `line_total`, one cent of tolerance), E6 (no negative amounts, `quantity` not above `qty_ordered`) and E7 (the invoice has at least one line). The checks of the totals block, the subtotal, the UPC, the unfulfilled lists and the other warnings were removed for now.
 - Log lines show the name of the file that wrote them (for example `extract.py`) instead of the package path, so it is easy to see which stage is running.
@@ -62,5 +59,6 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - Extraction joins a totals block that is split over two pages instead of keeping only the first half, which left the invoice without a total.
 
-[Unreleased]: https://github.com/camiloz2027/invoice-pipeline/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/camiloz2027/invoice-pipeline/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/camiloz2027/invoice-pipeline/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/camiloz2027/invoice-pipeline/releases/tag/v0.1.0
