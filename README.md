@@ -221,15 +221,16 @@ compared as `Decimal`, allowing a difference of one cent.
 Every line is checked the same way, including lines that were not shipped, because all of
 them are kept. For the example above:
 
-| Rule | Severity | What it checks | Example |
-|------|----------|----------------|---------|
-| E2 | error | Each line has its `quantity`; a line with a quantity above 0 also has `price` and `line_total` | `quantity` is not `null` |
-| E3 | error | `quantity` × `price` = `line_total` (a line with quantity 0 must total 0) | 5 × 32.0 = 160.0 |
-| E6 | error | No negative amounts, and `quantity` never above `qty_ordered` (only when the invoice has an ordered column) | 0 ≤ 5 ≤ 5 |
-| E7 | error | The invoice has at least one line | 1 line |
+| Rule | What it checks | Example |
+|------|----------------|---------|
+| E2 | Each line has its `quantity`; a line with a quantity above 0 also has `price` and `line_total` | `quantity` is not `null` |
+| E3 | `quantity` × `price` = `line_total` (a line with quantity 0 must total 0) | 5 × 32.0 = 160.0 |
+| E6 | No negative amounts, and `quantity` never above `qty_ordered` (only when the invoice has an ordered column) | 0 ≤ 5 ≤ 5 |
+| E7 | The invoice has at least one line | 1 line |
 
-- An invoice **fails** when it has at least one error.
-- All the findings are reported, not only the first one, each with its line and page.
+- Every rule is an error: an invoice **fails** when it has at least one.
+- All the errors are reported, not only the first one, each as a message with its line and
+  page, for example `E3 3 x 24.5 = 73.5, but line_total is 99.0 (line 3, page 2)`.
 - E7 flags an invoice that came out empty so someone looks at it. For example, when every row
   was a free item with no price, `extract.py` drops them and nothing is left.
 - The rule numbers are kept from the full list of rules designed for the check, so the ones
@@ -238,8 +239,7 @@ them are kept. For the example above:
   subtotal, missing pages, and the description, size and UPC digits. Some vendors print a
   subtotal that already includes the deposit rows of the table, which are not extracted, so
   those checks need a rule that allows for it.
-- For now a failed invoice is only reported in the log and in the returned report; nothing is
-  moved or corrected. What to do with it comes with the CLI.
+- For now a failed invoice is only reported in the log; nothing is moved or corrected. What to do with it comes with the CLI.
 
 ## Development
 

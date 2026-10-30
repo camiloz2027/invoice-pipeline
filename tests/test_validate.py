@@ -6,7 +6,7 @@ from invoice_pipeline.schemas import ExtractedLine, InvoiceExtraction
 from invoice_pipeline.validate import validate_all, validate_invoice
 
 
-def make_line(**changes) -> ExtractedLine:
+def make_line(**changes):
     """A valid invented line (3 x 24.50 = 73.50); each test changes only what it needs."""
     values = {
         "page": 1,
@@ -27,7 +27,7 @@ def make_line(**changes) -> ExtractedLine:
     return ExtractedLine(**values)
 
 
-def make_invoice(*lines: ExtractedLine) -> InvoiceExtraction:
+def make_invoice(*lines):
     return InvoiceExtraction(
         invoice_number="TEST001",
         extracted_at=datetime.date(2026, 1, 1),
@@ -36,15 +36,13 @@ def make_invoice(*lines: ExtractedLine) -> InvoiceExtraction:
     )
 
 
-def rules(report) -> list[str]:
-    return [issue.rule for issue in report.issues]
+def rules(errors):
+    """The rule of each error message, such as ["E3", "E2"]."""
+    return [error.split()[0] for error in errors]
 
 
 def test_correct_line_passes():
-    report = validate_invoice(make_invoice(make_line()))
-
-    assert report.ok
-    assert report.issues == []
+    assert validate_invoice(make_invoice(make_line())) == []
 
 
 @pytest.mark.parametrize(
@@ -58,97 +56,89 @@ def test_correct_line_passes():
     ],
 )
 def test_line_total_tolerance(line_total, should_pass):
-    report = validate_invoice(make_invoice(make_line(line_total=line_total)))
+    errors = validate_invoice(make_invoice(make_line(line_total=line_total)))
 
-    assert report.ok == should_pass
-    if not should_pass:
-        assert rules(report) == ["E3"]
+    if should_pass:
+        assert errors == []
+    else:
+        assert rules(errors) == ["E3"]
 
 
 def test_quantity_zero_with_zero_total_passes():
-    report = validate_invoice(make_invoice(make_line(quantity=0, line_total=0.0)))
-
-    assert report.ok
+    assert validate_invoice(make_invoice(make_line(quantity=0, line_total=0.0))) == []
 
 
 def test_quantity_zero_with_nonzero_total_fails():
-    report = validate_invoice(make_invoice(make_line(quantity=0, line_total=5.0)))
+    errors = validate_invoice(make_invoice(make_line(quantity=0, line_total=5.0)))
 
-    assert rules(report) == ["E3"]
+    assert rules(errors) == ["E3"]
 
 
 def test_quantity_zero_without_price_or_total_passes():
-    report = validate_invoice(make_invoice(make_line(quantity=0, price=None, line_total=None)))
+    line = make_line(quantity=0, price=None, line_total=None)
 
-    assert report.ok
+    assert validate_invoice(make_invoice(line)) == []
 
 
 def test_missing_quantity_fails():
-    report = validate_invoice(make_invoice(make_line(quantity=None)))
+    errors = validate_invoice(make_invoice(make_line(quantity=None)))
 
-    assert rules(report) == ["E2"]
+    assert rules(errors) == ["E2"]
 
 
 @pytest.mark.parametrize("missing", ["price", "line_total"])
 def test_shipped_line_without_price_or_total_fails(missing):
-    report = validate_invoice(make_invoice(make_line(**{missing: None})))
+    errors = validate_invoice(make_invoice(make_line(**{missing: None})))
 
-    assert rules(report) == ["E2"]
+    assert rules(errors) == ["E2"]
 
 
 @pytest.mark.parametrize("name", ["quantity", "price", "list_price", "unit_price", "line_total"])
 def test_negative_amount_fails(name):
-    report = validate_invoice(make_invoice(make_line(**{name: -1})))
+    errors = validate_invoice(make_invoice(make_line(**{name: -1})))
 
-    assert "E6" in rules(report)
-    assert not report.ok
+    assert "E6" in rules(errors)
 
 
 def test_quantity_above_ordered_fails():
-    report = validate_invoice(make_invoice(make_line(quantity=3, qty_ordered=2)))
+    errors = validate_invoice(make_invoice(make_line(quantity=3, qty_ordered=2)))
 
-    assert rules(report) == ["E6"]
+    assert rules(errors) == ["E6"]
 
 
 def test_quantity_not_above_ordered_passes():
-    report = validate_invoice(make_invoice(make_line(quantity=3, qty_ordered=3)))
-
-    assert report.ok
+    assert validate_invoice(make_invoice(make_line(quantity=3, qty_ordered=3))) == []
 
 
 def test_error_points_to_the_right_line_and_page():
     good = make_line()
     bad = make_line(page=2, line_total=99.00)
 
-    report = validate_invoice(make_invoice(good, good, bad))
+    errors = validate_invoice(make_invoice(good, good, bad))
 
-    assert len(report.errors) == 1
-    assert report.errors[0].line == 3
-    assert report.errors[0].page == 2
+    assert len(errors) == 1
+    assert errors[0].endswith("(line 3, page 2)")
 
 
 def test_every_bad_line_is_reported():
-    report = validate_invoice(
+    errors = validate_invoice(
         make_invoice(make_line(line_total=1.0), make_line(), make_line(quantity=None))
     )
 
-    assert rules(report) == ["E3", "E2"]
+    assert rules(errors) == ["E3", "E2"]
 
 
 def test_invoice_without_lines_fails():
-    report = validate_invoice(make_invoice())
-
-    assert rules(report) == ["E7"]
-    assert not report.ok
+    assert rules(validate_invoice(make_invoice())) == ["E7"]
 
 
 def test_validate_all_reads_every_json(tmp_path):
     (tmp_path / "good.json").write_text(make_invoice(make_line()).model_dump_json())
     (tmp_path / "bad.json").write_text(make_invoice(make_line(line_total=99.0)).model_dump_json())
 
-    reports = validate_all(tmp_path)
+    results = validate_all(tmp_path)
 
-    assert {path.name: report.ok for path, report in reports.items()} == {
+    assert {path.name: errors == [] for path, errors in results.items()} == {
         "bad.json": False,
         "good.json": True,
     }
