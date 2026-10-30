@@ -89,17 +89,12 @@ Run `pdf_to_images.py` first, then open the picker for that vendor:
 python src/invoice_pipeline/pick_boxes.py <vendor>
 ```
 
-It opens a page in your browser with the vendor's pages. Drag on a page to select a zone; drag
-its handles to resize it or drag inside it to move it. Then click **Save as body zone** (the
-invoice lines and totals) or **Save as invoice-number zone**. A saved zone can be loaded back
-with the **Edit saved ...** buttons, and **Select whole page** starts from the full page.
-The zone is written to `data/vendors/<vendor>.toml`, and saved zones are drawn on every page so
-you can check that they fit all of them. Click **Finish** to stop the picker (or press Ctrl+C in
-the terminal).
-
-The picker runs a small server that only your own computer can reach, protected by a random
-access token, and loads nothing from the internet. The pages shown are full pages, so keep an
-eye on browser extensions that can read page contents.
+It opens a window (matplotlib) with the vendor's pages. Drag on a page to draw a zone; drag its
+handles to resize it or drag inside it to move it. Then press **b** to save it as the body zone
+(the invoice lines and totals) or **i** to save it as the invoice-number zone. The left and right
+arrow keys change the page and **q** closes the window. The zone is written to
+`data/vendors/<vendor>.toml`, and saved zones are drawn on every page (blue = body, green =
+invoice number) so you can check that they fit all of them.
 
 A settings file is plain text, one zone per line, as fractions of the page
 (left, top, right, bottom):
